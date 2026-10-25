@@ -1,5 +1,7 @@
 const { app, BrowserWindow, Menu, globalShortcut, ipcMain, screen, session, systemPreferences } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const { execFile, spawn } = require('child_process');
 const { transcribe } = require('./stt');
 const { ask } = require('./brain');
 const speech = require('./speak');
@@ -13,6 +15,25 @@ const cornerBounds = (w, h) => {
   const a = screen.getPrimaryDisplay().workArea;
   return { x: a.x + a.width - w - 12, y: a.y + a.height - h - 12, width: w, height: h };
 };
+let helper;
+// Double-tap Control: a tiny Swift helper watches the modifier key (Electron's globalShortcut can't do modifier-only keys).
+function startDoubleTap() {
+  const src = path.join(__dirname, 'helpers/doubletap.swift');
+  const bin = path.join(__dirname, 'bin/doubletap');
+  const launch = () => {
+    helper = spawn(bin);
+    helper.stdout.on('data', (d) => d.toString().includes('double') && win.webContents.send('toggle'));
+    helper.stderr.on('data', (d) => { console.error(d.toString()); send({ state: 'idle', error: d.toString().trim() }); });
+  };
+  const fresh = fs.existsSync(bin) && fs.statSync(bin).mtimeMs >= fs.statSync(src).mtimeMs;
+  if (fresh) return launch();
+  fs.mkdirSync(path.dirname(bin), { recursive: true });
+  execFile('swiftc', ['-swift-version', '5', '-O', src, '-o', bin], (err) => {
+    if (err) console.error('Double-tap Control disabled (needs Xcode command line tools: xcode-select --install). Option+Space still works.');
+    else launch();
+  });
+}
+
 const send = (msg) => win && !win.isDestroyed() && win.webContents.send('state', msg);
 
 async function handleAudio(buf) {
@@ -49,6 +70,7 @@ app.whenReady().then(async () => {
   if (!globalShortcut.register(HOTKEY, () => win.webContents.send('toggle'))) {
     console.error(`Could not register ${HOTKEY}; click the orb instead or set JARVIS_HOTKEY.`);
   }
+  startDoubleTap();
   ipcMain.on('listen-start', () => speech.stop());
   ipcMain.on('audio', (_e, buf) => handleAudio(buf));
   ipcMain.on('quit', () => app.quit());
@@ -56,5 +78,5 @@ app.whenReady().then(async () => {
   ipcMain.on('menu', () => Menu.buildFromTemplate([{ label: 'Quit JARVIS', click: () => app.quit() }]).popup({ window: win }));
 });
 
-app.on('will-quit', () => { globalShortcut.unregisterAll(); speech.stop(); });
+app.on('will-quit', () => { globalShortcut.unregisterAll(); speech.stop(); helper?.kill(); });
 app.on('window-all-closed', () => app.quit());
