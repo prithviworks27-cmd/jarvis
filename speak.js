@@ -107,7 +107,7 @@ async function speak(text) {
   const mine = gen;
   const clean = text.replace(/[*_`#>]/g, '').trim();
   if (!clean) return;
-  const parts = clean.match(/[^.!?]+[.!?]*\s*/g) || [clean];
+  const parts = clean.split(/(?<=[.!?])\s+/); // split after sentence ends only, so "25.8 degrees" stays whole
   const mode = process.env.JARVIS_TTS;
   const chain = mode === 'say' ? [] : mode === 'kokoro' ? [kokoro] : [orpheus, kokoro];
 

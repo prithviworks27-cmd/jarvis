@@ -15,6 +15,10 @@ const cornerBounds = (w, h) => {
   const a = screen.getPrimaryDisplay().workArea;
   return { x: a.x + a.width - w - 12, y: a.y + a.height - h - 12, width: w, height: h };
 };
+// A second copy (e.g. autostart plus a manual `npm start`) would answer every question twice.
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) app.quit();
+
 let helper;
 // Double-tap Control: a tiny Swift helper watches the modifier key (Electron's globalShortcut can't do modifier-only keys).
 function startDoubleTap() {
@@ -41,10 +45,13 @@ async function handleAudio(buf) {
     if (!process.env.GROQ_API_KEY) throw new Error('GROQ_API_KEY missing. Copy .env.example to .env and add your key.');
     if (buf.byteLength < 2000) return send({ state: 'idle' }); // too short to be speech
     send({ state: 'thinking' });
+    const t0 = Date.now();
     const you = (await transcribe(Buffer.from(buf))).trim();
+    const t1 = Date.now();
     if (!you) return send({ state: 'idle' });
     send({ state: 'thinking', you });
     const jarvis = await ask(you);
+    console.log(`timing: speech-to-text ${t1 - t0}ms, brain ${Date.now() - t1}ms`);
     send({ state: 'speaking', you, jarvis });
     await speech.speak(jarvis);
     send({ state: 'idle', you, jarvis });
@@ -54,7 +61,7 @@ async function handleAudio(buf) {
   }
 }
 
-app.whenReady().then(async () => {
+if (gotLock) app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_wc, perm, cb) => cb(perm === 'media'));
   if (process.platform === 'darwin') await systemPreferences.askForMediaAccess('microphone');
 
