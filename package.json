@@ -12,5 +12,9 @@
   "type": "commonjs",
   "devDependencies": {
     "electron": "^45.0.0"
+  },
+  "dependencies": {
+    "kokoro-js": "^1.2.1",
+    "sharp": "^0.35.5"
   }
 }

@@ -71,6 +71,7 @@ app.whenReady().then(async () => {
     console.error(`Could not register ${HOTKEY}; click the orb instead or set JARVIS_HOTKEY.`);
   }
   startDoubleTap();
+  speech.warm();
   ipcMain.on('listen-start', () => speech.stop());
   ipcMain.on('audio', (_e, buf) => handleAudio(buf));
   ipcMain.on('quit', () => app.quit());
@@ -78,5 +79,5 @@ app.whenReady().then(async () => {
   ipcMain.on('menu', () => Menu.buildFromTemplate([{ label: 'Quit JARVIS', click: () => app.quit() }]).popup({ window: win }));
 });
 
-app.on('will-quit', () => { globalShortcut.unregisterAll(); speech.stop(); helper?.kill(); });
+app.on('will-quit', () => { globalShortcut.unregisterAll(); speech.stop(); speech.shutdown(); helper?.kill(); });
 app.on('window-all-closed', () => app.quit());
