@@ -1,14 +1,14 @@
 const { definitions, runTool } = require('./tools');
 
-const MODEL = process.env.JARVIS_MODEL || 'llama-3.3-70b-versatile';
+const MODEL = process.env.JARVIS_MODEL || 'openai/gpt-oss-120b';
 const MAX_HISTORY = 20;
 const MAX_STEPS = 5;
 const history = [];
 
 const system = () => `You are JARVIS, a witty, dry, impeccably polite British AI butler running on the user's Mac. \
-Address the user as "${process.env.JARVIS_USER_NAME || 'sir'}". Your replies are spoken aloud: keep them to one or two short sentences, \
+Address the user as "${process.env.JARVIS_USER_NAME || 'sir'}". Your replies are spoken aloud: keep them to one or two short sentences and give exactly one answer, never repeat yourself, \
 no lists, no markdown, no emoji. Use tools to act; never claim you did something a tool did not confirm. \
-If a tool returns an error, say so briefly. Current date and time: ${new Date().toString()}.`;
+For anything current (weather, news, sports, recent events) or facts you are unsure of, call news, weather or wikipedia and answer from their results; summarise in your own words. If a tool returns an error, say so briefly. Current date and time: ${new Date().toString()}.`;
 
 async function chat(messages) {
   const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {

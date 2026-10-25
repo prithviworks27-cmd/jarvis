@@ -29,6 +29,7 @@ Try:
 - "Set the volume to 30." / "Mute." / "Turn the screen off."
 - "What's on my calendar today?" / "Remind me to submit the report."
 - "Do I have any unread mail?"
+- "What's the weather in Bengaluru?" / "Any news about the IPL?" / "Who is Sundar Pichai?" (live, free: Open-Meteo, Google News RSS, Wikipedia; no keys)
 
 ## macOS permissions
 
@@ -44,8 +45,9 @@ If you clicked Don't Allow, fix it in System Settings > Privacy & Security.
 | `GROQ_API_KEY` | required |
 | `JARVIS_USER_NAME` | `sir` |
 | `JARVIS_VOICE` | `Daniel` (list voices with `say -v '?'`) |
+| `JARVIS_CITY` | none (used when you just say "the weather") |
 | `JARVIS_HOTKEY` | `Alt+Space` |
-| `JARVIS_MODEL` | `llama-3.3-70b-versatile` |
+| `JARVIS_MODEL` | `openai/gpt-oss-120b` |
 
 ## Files
 

@@ -8,6 +8,20 @@ const run = (cmd, args) =>
 // Script args go through AppleScript's `argv`, never string-spliced into the script.
 const osa = (script, ...args) => run('osascript', ['-e', script, ...args]);
 
+
+const getJSON = async (url) => {
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000), headers: { 'User-Agent': 'jarvis-assistant/1.0' } });
+  if (!res.ok) throw new Error(`${new URL(url).hostname} returned ${res.status}`);
+  return res;
+};
+
+// WMO weather codes (Open-Meteo), grouped.
+const WEATHER = { 0: 'clear', 1: 'mostly clear', 2: 'partly cloudy', 3: 'overcast', 45: 'fog', 48: 'fog', 51: 'light drizzle', 53: 'drizzle', 55: 'heavy drizzle',
+  61: 'light rain', 63: 'rain', 65: 'heavy rain', 71: 'light snow', 73: 'snow', 75: 'heavy snow', 80: 'rain showers', 81: 'rain showers', 82: 'violent rain showers',
+  95: 'thunderstorm', 96: 'thunderstorm with hail', 99: 'thunderstorm with hail' };
+
+const decode = (s) => s.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+
 const fn = (name, description, properties = {}, required = []) => ({
   type: 'function',
   function: { name, description, parameters: { type: 'object', properties, required } },
@@ -27,10 +41,45 @@ const tools = {
     },
   },
   web_search: {
-    def: fn('web_search', 'Search the web in the default browser.', { query: { type: 'string' } }, ['query']),
+    def: fn('web_search', 'Only to show the user a Google results page in their browser. To answer a question yourself, use news, weather or wikipedia instead.', { query: { type: 'string' } }, ['query']),
     run: async ({ query }) => {
       await run('open', ['https://www.google.com/search?q=' + encodeURIComponent(query)]);
       return `Searched for ${query}.`;
+    },
+  },
+  weather: {
+    def: fn('weather', 'Get current weather and today/tomorrow forecast for a city. Omit city to use the user\'s default city.', { city: { type: 'string' } }),
+    run: async ({ city }) => {
+      const name = city || process.env.JARVIS_CITY;
+      if (!name) throw new Error('No city given and JARVIS_CITY is not set in .env.');
+      const geo = (await (await getJSON(`https://geocoding-api.open-meteo.com/v1/search?count=1&name=${encodeURIComponent(name)}`)).json()).results?.[0];
+      if (!geo) throw new Error(`Could not find a place called ${name}.`);
+      const f = await (await getJSON(`https://api.open-meteo.com/v1/forecast?latitude=${geo.latitude}&longitude=${geo.longitude}&timezone=auto&forecast_days=2` +
+        '&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m' +
+        '&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code')).json();
+      const c = f.current, d = f.daily;
+      const day = (i) => `${WEATHER[d.weather_code[i]] || 'unknown'}, ${d.temperature_2m_min[i]} to ${d.temperature_2m_max[i]}°C, ${d.precipitation_probability_max[i]}% chance of rain`;
+      return `${geo.name}, ${geo.country}: now ${c.temperature_2m}°C (feels ${c.apparent_temperature}°C), ${WEATHER[c.weather_code] || 'unknown'}, humidity ${c.relative_humidity_2m}%, wind ${c.wind_speed_10m} km/h. Today: ${day(0)}. Tomorrow: ${day(1)}.`;
+    },
+  },
+  news: {
+    def: fn('news', 'Get the latest news headlines, optionally about a topic. Use for any question about recent events, sports results, or "what is happening".',
+      { topic: { type: 'string' } }),
+    run: async ({ topic }) => {
+      const base = topic ? `https://news.google.com/rss/search?q=${encodeURIComponent(topic)}&` : 'https://news.google.com/rss?';
+      const xml = await (await getJSON(base + 'hl=en-IN&gl=IN&ceid=IN:en')).text();
+      const items = [...xml.matchAll(/<item>[\s\S]*?<title>([\s\S]*?)<\/title>[\s\S]*?<pubDate>([\s\S]*?)<\/pubDate>/g)].slice(0, 6);
+      if (!items.length) return 'No headlines found.';
+      return items.map((m) => `${decode(m[1])} (${m[2].slice(0, 16)})`).join('\n');
+    },
+  },
+  wikipedia: {
+    def: fn('wikipedia', 'Look up facts about a person, place, thing or concept on Wikipedia. Use for general knowledge you are unsure of.', { query: { type: 'string' } }, ['query']),
+    run: async ({ query }) => {
+      const hit = (await (await getJSON(`https://en.wikipedia.org/w/api.php?action=query&list=search&srlimit=1&format=json&srsearch=${encodeURIComponent(query)}`)).json()).query.search[0];
+      if (!hit) return 'Nothing found on Wikipedia.';
+      const sum = await (await getJSON(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(hit.title)}`)).json();
+      return `${sum.title}: ${sum.extract}`.slice(0, 1500);
     },
   },
   set_volume: {

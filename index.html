@@ -7,11 +7,14 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <button id="quit" aria-label="Quit JARVIS">×</button>
-  <button id="orb" class="idle" aria-label="Talk to JARVIS"></button>
-  <p id="status" role="status" aria-live="polite">Press ⌥Space or click the orb</p>
-  <p id="you"></p>
-  <p id="jarvis"></p>
+  <main id="wrap">
+    <div id="bubble" hidden>
+      <p id="you"></p>
+      <p id="jarvis"></p>
+      <p id="status" role="status" aria-live="polite"></p>
+    </div>
+    <button id="orb" class="idle" aria-label="Talk to JARVIS (Option+Space)" title="Click or press ⌥Space. Right-click to quit."></button>
+  </main>
   <script src="renderer.js"></script>
 </body>
 </html>

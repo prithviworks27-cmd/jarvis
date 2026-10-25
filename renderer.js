@@ -1,13 +1,28 @@
 const orb = document.getElementById('orb');
-const status = document.getElementById('status');
-const LABELS = { idle: 'Press ⌥Space or click the orb', listening: 'Listening…', thinking: 'Thinking…', speaking: 'Speaking…' };
+const bubble = document.getElementById('bubble');
+const $ = (id) => document.getElementById(id);
+const LABELS = { idle: '', listening: 'Listening…', thinking: 'Thinking…', speaking: '' };
 
 let rec = null;
+let hideTimer;
 
-function setState(state, error) {
+// Grow or shrink the window to fit the bubble, anchored to the screen corner by main.
+function fit() {
+  const w = bubble.hidden ? 100 : 340;
+  window.jarvis.resize(w, bubble.hidden ? 100 : bubble.offsetHeight + 10 + 64 + 18 + 4);
+}
+
+function show(state, { you, jarvis, error } = {}) {
+  clearTimeout(hideTimer);
   orb.className = state;
-  status.className = error ? 'error' : '';
-  status.textContent = error || LABELS[state];
+  if (you !== undefined) $('you').textContent = `“${you}”`;
+  if (jarvis !== undefined) $('jarvis').textContent = jarvis;
+  $('status').className = error ? 'error' : '';
+  $('status').textContent = error || LABELS[state];
+  bubble.hidden = state === 'idle' && !error && !$('jarvis').textContent;
+  if (!bubble.hidden) fit();
+  else window.jarvis.resize(100, 100);
+  if (state === 'idle') hideTimer = setTimeout(() => { bubble.hidden = true; $('you').textContent = $('jarvis').textContent = ''; fit(); }, error ? 10000 : 12000);
 }
 
 async function toggle() {
@@ -16,7 +31,7 @@ async function toggle() {
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch {
-    return setState('idle', 'Microphone blocked. Allow it in System Settings > Privacy & Security > Microphone.');
+    return show('idle', { error: 'Microphone blocked. Allow it in System Settings > Privacy & Security > Microphone.' });
   }
   window.jarvis.listenStarted();
   const chunks = [];
@@ -28,14 +43,11 @@ async function toggle() {
     window.jarvis.sendAudio(await new Blob(chunks, { type: 'audio/webm' }).arrayBuffer());
   };
   rec.start();
-  setState('listening');
+  $('you').textContent = $('jarvis').textContent = '';
+  show('listening');
 }
 
 window.jarvis.onToggle(toggle);
-window.jarvis.onState(({ state, you, jarvis, error }) => {
-  setState(state, error);
-  if (you !== undefined) document.getElementById('you').textContent = `“${you}”`;
-  if (jarvis !== undefined) document.getElementById('jarvis').textContent = jarvis;
-});
+window.jarvis.onState(({ state, ...rest }) => show(state, rest));
 orb.addEventListener('click', toggle);
-document.getElementById('quit').addEventListener('click', () => window.jarvis.quit());
+orb.addEventListener('contextmenu', (e) => { e.preventDefault(); window.jarvis.menu(); });
