@@ -1,4 +1,7 @@
 const { execFile } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const run = (cmd, args) =>
   new Promise((resolve, reject) =>
@@ -80,6 +83,34 @@ const tools = {
       if (!hit) return 'Nothing found on Wikipedia.';
       const sum = await (await getJSON(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(hit.title)}`)).json();
       return `${sum.title}: ${sum.extract}`.slice(0, 1500);
+    },
+  },
+  look_at_screen: {
+    def: fn('look_at_screen', 'Take a screenshot of the user\'s screen and answer a question about it. Use whenever they say "this", "what am I looking at", "read my screen", "help with this error", etc.',
+      { question: { type: 'string', description: 'What to find out about the screen' } }, ['question']),
+    run: async ({ question }) => {
+      const file = path.join(os.tmpdir(), `jarvis-screen-${process.pid}.jpg`);
+      try {
+        await run('screencapture', ['-x', '-t', 'jpg', file]);
+        await run('sips', ['-Z', '1280', file]); // keeps the upload small and fast
+        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: process.env.JARVIS_VISION_MODEL || 'qwen/qwen3.8-27b',
+            messages: [{ role: 'user', content: [
+              { type: 'text', text: `${question || 'Describe the screen.'} Answer in at most three sentences.` },
+              { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + fs.readFileSync(file).toString('base64') } },
+            ] }],
+            max_completion_tokens: 400,
+          }),
+          signal: AbortSignal.timeout(30000),
+        });
+        if (!res.ok) throw new Error(`vision request failed (${res.status})`);
+        return (await res.json()).choices[0].message.content;
+      } finally {
+        fs.unlink(file, () => {});
+      }
     },
   },
   set_volume: {
