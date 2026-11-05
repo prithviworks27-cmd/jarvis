@@ -29,6 +29,7 @@ Try:
 - "Set the volume to 30." / "Mute." / "Turn the screen off."
 - "What's on my calendar today?" / "Remind me to submit the report."
 - "Do I have any unread mail?"
+- "What's on my screen?" / "Explain this error." (takes a screenshot and asks a free Groq vision model; the image is sent to Groq, never saved)
 - "What's the weather in Bengaluru?" / "Any news about the IPL?" / "Who is Sundar Pichai?" (live, free: Open-Meteo, Google News RSS, Wikipedia; no keys)
 
 The Orpheus model needs a one-time terms acceptance at https://console.groq.com/playground?model=canopylabs%2Forpheus-v1-english
@@ -41,6 +42,7 @@ The first time Kokoro starts it downloads its ~90 MB model (about a minute, once
 
 The first time you use each feature macOS asks for permission; click Allow.
 - **Microphone** for Electron.
+- **Screen Recording** for Electron, so JARVIS can see your screen. Without it screenshots show only your wallpaper.
 - **Automation** (Calendar, Reminders, Mail) so JARVIS can read them.
 If you clicked Don't Allow, fix it in System Settings > Privacy & Security.
 
