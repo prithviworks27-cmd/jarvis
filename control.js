@@ -102,20 +102,30 @@ end run`, query);
       def: fn('whatsapp_open_chat', 'Open the WhatsApp chat with a person or group by name. Does not type or send anything in the chat.', { name: { type: 'string' } }, ['name']),
       run: logged('whatsapp_open_chat', async ({ name }) => {
         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-        // Search results appear a moment after typing, and arrow-down only highlights a row once they exist.
-        await osa('tell application "WhatsApp" to activate');
-        await sleep(600);
+        if ((await frontApp()).toLowerCase() !== 'whatsapp') { await osa('tell application "WhatsApp" to activate'); await sleep(300); }
         await requireAllowed();
-        await osa('on run argv\ntell application "System Events"\nkeystroke "f" using {command down}\ndelay 0.4\nkeystroke (item 1 of argv)\nend tell\nend run', name);
-        await sleep(2000);
-        // Look at the screen instead of trusting the keystrokes: retry the Down/Return pair if the chat did not open.
+        // One script for the whole sequence (no per-step process spawns). The wait lets search results render before Down highlights the first one.
+        const wait = Number(process.env.JARVIS_SEARCH_WAIT) || 1;
+        await osa(`on run argv
+tell application "System Events"
+  keystroke "f" using {command down}
+  delay 0.15
+  keystroke (item 1 of argv)
+  delay ${wait}
+  key code 125
+  delay 0.15
+  key code 36
+end tell
+end run`, name);
+        if (process.env.JARVIS_VERIFY !== '1') return `Opened the WhatsApp chat for ${name}.`;
+        // Slow but careful mode (JARVIS_VERIFY=1): look at the screen and retry once if the chat did not open.
         const opened = async () => /^\W*yes/i.test(await describeScreen(`Look at the WhatsApp window. Is the chat whose name contains "${name}" currently OPEN, meaning its name is in the header at the top of the right-hand conversation pane (not just in the search box or the result list)? Answer only YES or NO.`));
         for (let attempt = 0; attempt < 2; attempt++) {
-          await sysevents('key code 125'); // down: highlights the first search result
           await sleep(500);
-          await sysevents('key code 36'); // return: opens it
-          await sleep(1200);
-          if (await opened()) return `Opened the WhatsApp chat for ${name}.`;
+          let ok;
+          try { ok = await opened(); } catch { return `Pressed Return on the first WhatsApp result for ${name}, but I could not verify it opened.`; }
+          if (ok) return `Opened the WhatsApp chat for ${name}.`;
+          if (attempt === 0) { await sysevents('key code 125'); await sleep(500); await sysevents('key code 36'); await sleep(1200); }
         }
         throw new Error(`I searched WhatsApp for ${name} but could not confirm the chat opened.`);
       }),

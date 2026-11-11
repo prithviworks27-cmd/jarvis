@@ -70,6 +70,7 @@ Needs the **Accessibility** permission (typing/clicking) and **Automation** for 
 | `JARVIS_TTS` | unset = Orpheus, then Kokoro, then macOS. `kokoro` = offline only (no daily limit). `say` = macOS voice only |
 | `JARVIS_VOICE` | `Daniel`, the macOS fallback voice (`say -v '?'` lists them) |
 | `JARVIS_CONTROL_APPS` | `Google Chrome,Safari,WhatsApp,Spotify,Music,Notes` |
+| `JARVIS_VOCAB` | none. Comma-separated names (contacts, apps) so speech recognition spells them right |
 | `JARVIS_CITY` | none (used when you just say "the weather") |
 | `JARVIS_HOTKEY` | `Alt+Space` |
 | `JARVIS_MODEL` | `openai/gpt-oss-120b` |
