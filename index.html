@@ -7,14 +7,19 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main id="wrap">
+  <div id="buddy" data-state="idle">
+    <button id="body" aria-label="Talk to JARVIS" title="Click, double-tap Control, or press Option+Space. Right-click to quit.">
+      <span class="eye l"></span>
+      <span class="eye r"></span>
+      <span id="nose"></span>
+      <span id="mouth"></span>
+    </button>
     <div id="bubble" hidden>
       <p id="you"></p>
       <p id="jarvis"></p>
       <p id="status" role="status" aria-live="polite"></p>
     </div>
-    <button id="orb" class="idle" aria-label="Talk to JARVIS (Option+Space)" title="Click or press ⌥Space or ⌃⌃. Right-click to quit."></button>
-  </main>
+  </div>
   <script src="renderer.js"></script>
 </body>
 </html>
