@@ -59,7 +59,18 @@ const fn = (name, description, properties = {}, required = []) => ({
 const tools = {
   open_app: {
     def: fn('open_app', 'Open a Mac application by name, e.g. "Spotify".', { name: { type: 'string' } }, ['name']),
-    run: async ({ name }) => { await run('open', ['-a', name]); return `Opened ${name}.`; },
+    run: async ({ name }) => {
+      // `open -a` needs the exact app name ("Google Chrome"), but people say "Chrome": fall back to the closest installed app.
+      try { await run('open', ['-a', name]); return `Opened ${name}.`; } catch (e) {
+        const q = name.toLowerCase().replace(/\.app$/, '');
+        const dirs = ['/Applications', '/System/Applications', '/System/Applications/Utilities', '/Applications/Utilities', path.join(os.homedir(), 'Applications')];
+        const apps = dirs.flatMap((d) => { try { return fs.readdirSync(d).filter((f) => f.endsWith('.app')).map((f) => f.slice(0, -4)); } catch { return []; } });
+        const match = apps.filter((a) => a.toLowerCase().includes(q)).sort((a, b) => a.length - b.length)[0];
+        if (!match) throw e;
+        await run('open', ['-a', match]);
+        return `Opened ${match}.`;
+      }
+    },
   },
   open_url: {
     def: fn('open_url', 'Open an http(s) URL in the default browser.', { url: { type: 'string' } }, ['url']),
