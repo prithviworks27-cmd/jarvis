@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { execFile, spawn } = require('child_process');
 const { transcribe } = require('./stt');
-const { ask } = require('./brain');
+const { ask, cancel } = require('./brain');
 const speech = require('./speak');
 
 try { process.loadEnvFile(path.join(__dirname, '.env')); } catch { /* no .env yet; handled in handleAudio */ }
@@ -82,7 +82,7 @@ if (gotLock) app.whenReady().then(async () => {
   }
   startDoubleTap();
   speech.warm();
-  ipcMain.on('listen-start', () => speech.stop());
+  ipcMain.on('listen-start', () => { speech.stop(); cancel(); }); // talking again also stops any action in progress
   ipcMain.on('audio', (_e, buf) => handleAudio(buf));
   ipcMain.on('quit', () => app.quit());
   ipcMain.on('interactive', (_e, on) => win.setIgnoreMouseEvents(!on, { forward: true }));

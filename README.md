@@ -29,6 +29,7 @@ Try:
 - "Set the volume to 30." / "Mute." / "Turn the screen off."
 - "What's on my calendar today?" / "Remind me to submit the report."
 - "Do I have any unread mail?"
+- "Switch to my YouTube tab." / "Open my WhatsApp chat with Rahul." / "Type hello." (works inside apps)
 - "What's on my screen?" / "Explain this error." (takes a screenshot and asks a free Groq vision model; the image is sent to Groq, never saved)
 - "What's the weather in Bengaluru?" / "Any news about the IPL?" / "Who is Sundar Pichai?" (live, free: Open-Meteo, Google News RSS, Wikipedia; no keys)
 
@@ -46,6 +47,18 @@ The first time you use each feature macOS asks for permission; click Allow.
 - **Automation** (Calendar, Reminders, Mail) so JARVIS can read them.
 If you clicked Don't Allow, fix it in System Settings > Privacy & Security.
 
+## Controlling other apps (and the safety rules)
+
+JARVIS can switch Chrome tabs, open a WhatsApp chat, type text, press keys and click labelled buttons. The rules live in `control.js` and are enforced in code, not just in the prompt:
+- Only apps in `JARVIS_CONTROL_APPS` (default: Google Chrome, Safari, WhatsApp, Spotify, Music, Notes) can receive keys or clicks.
+- Pressing Return/Enter, or clicking something called send/pay/delete/etc., is parked until **you** say "yes" in your next message. The AI cannot confirm for you.
+- It will not type into password fields or multi-line text.
+- Talking to it again (double-tap Control) cancels whatever it was doing.
+- Every action is logged to `~/Library/Logs/jarvis-actions.log`.
+- Text on screens, web pages and emails is treated as data, never as orders.
+
+Needs the **Accessibility** permission (typing/clicking) and **Automation** for Chrome/WhatsApp. Clicking by label uses the app's accessibility tree, so it can be slow, and some apps (Electron ones like Claude/Slack) expose nothing to click.
+
 ## Options (`.env`)
 
 | Variable | Default |
@@ -56,6 +69,7 @@ If you clicked Don't Allow, fix it in System Settings > Privacy & Security.
 | `JARVIS_KOKORO_VOICE` | `bm_george` (British male; also `bm_lewis`, `bm_daniel`, `bm_fable`, `af_heart`, `af_bella`) |
 | `JARVIS_TTS` | unset = Orpheus, then Kokoro, then macOS. `kokoro` = offline only (no daily limit). `say` = macOS voice only |
 | `JARVIS_VOICE` | `Daniel`, the macOS fallback voice (`say -v '?'` lists them) |
+| `JARVIS_CONTROL_APPS` | `Google Chrome,Safari,WhatsApp,Spotify,Music,Notes` |
 | `JARVIS_CITY` | none (used when you just say "the weather") |
 | `JARVIS_HOTKEY` | `Alt+Space` |
 | `JARVIS_MODEL` | `openai/gpt-oss-120b` |
@@ -66,6 +80,7 @@ If you clicked Don't Allow, fix it in System Settings > Privacy & Security.
 - `stt.js` Groq Whisper
 - `brain.js` LLM loop with tool calling and short-term memory
 - `tools.js` the Mac actions (add new ones here)
+- `control.js` acting inside other apps, with the safety rules
 - `speak.js` voices: Orpheus (Groq), offline Kokoro, macOS `say` fallback
 - `kokoro-worker.mjs` runs the Kokoro model in its own process
 - `index.html`, `renderer.js`, `style.css` the orb UI
