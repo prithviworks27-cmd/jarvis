@@ -156,6 +156,24 @@ end run`, query);
         throw new Error(`I searched WhatsApp for ${name} but could not confirm the chat opened. It may already have been open.`);
       }),
     },
+    type_in_whatsapp_chat: {
+      def: fn('type_in_whatsapp_chat', 'Type text into the message box of the WhatsApp chat that is currently open, without sending it. Use when the user says to type in this chat.', { text: { type: 'string' } }, ['text']),
+      run: logged('type_in_whatsapp_chat', async ({ text }) => {
+        if (/[\r\n\t]/.test(text)) throw new Error('Only single-line text can be typed.');
+        if ((await frontApp()).toLowerCase() !== 'whatsapp') { await osa('tell application "WhatsApp" to activate'); await new Promise((r) => setTimeout(r, 400)); }
+        await requireAllowed();
+        // Click the message box first so the text cannot land in the search field or the chat list.
+        const [x, y, w, h] = (await osa('tell application "System Events" to tell process "WhatsApp" to return (position of window 1) & (size of window 1)')).split(',').map(Number);
+        await run('osascript', ['-l', 'JavaScript', '-e', `ObjC.import('CoreGraphics');
+function run(argv) {
+  const p = $.CGPointMake(Number(argv[0]), Number(argv[1]));
+  for (const t of [$.kCGEventLeftMouseDown, $.kCGEventLeftMouseUp]) $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent($(), t, p, $.kCGMouseButtonLeft));
+}`, String(Math.round(x + 0.68 * w)), String(Math.round(y + h - 26))]);
+        await new Promise((r) => setTimeout(r, 150));
+        await osa('on run argv\ntell application "System Events" to keystroke (item 1 of argv)\nend run', text);
+        return 'Typed in the WhatsApp message box (not sent).';
+      }),
+    },
     type_text: {
       def: fn('type_text', 'Type a single line of text into the focused field of the front app (it must be an allowed app). Never presses Return.', { text: { type: 'string' } }, ['text']),
       run: logged('type_text', async ({ text }) => {
