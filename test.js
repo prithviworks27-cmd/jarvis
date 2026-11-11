@@ -24,5 +24,6 @@ const { definitions, runTool } = require('./tools');
   new Function(pageClickScript('Work "log" \\ - Nov', true)); // must be valid JS even for awkward labels
   assert.ok(pageClickScript('x', true).includes('dblclick') && !pageClickScript('x', false).includes('dblclick'));
   assert.ok(pageClickScript('x').includes('\\s+'), 'regex escapes must survive the template literal');
+  assert.match(await runTool('open_app', { name: 'Definitely Not An App 12345' }), /^Error:/);
   console.log('ok');
 })().catch((e) => { console.error(e); process.exit(1); });
