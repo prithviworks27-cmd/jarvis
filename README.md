@@ -22,7 +22,7 @@ npm start
 
 ## Use
 
-Press **Control twice quickly**, **Option+Space**, or click the orb to start listening; do it again to stop. Pressing it while JARVIS is speaking interrupts him.
+Press **Control twice quickly** or **Option+Space** to start listening; do it again to stop. Clicking the character only pokes it (it reacts but does not listen); drag it to move it. Pressing it while JARVIS is speaking interrupts him.
 
 Try:
 - "Open Spotify." / "Search YouTube for lo-fi beats."

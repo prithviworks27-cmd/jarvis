@@ -3,8 +3,7 @@ const buddy = $('buddy');
 const body = $('body');
 const bubble = $('bubble');
 const LABELS = { idle: '', listening: 'Listening…', thinking: 'Thinking…', speaking: '' };
-const SIZE = 60; // keep in sync with --k in style.css (SIZE / 88)
-const K = SIZE / 88;
+const SIZE = 76; // keep in sync with --size in style.css
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 let rec = null;
@@ -71,7 +70,14 @@ body.addEventListener('pointerup', () => {
   if (drag?.moved) { justDragged = true; try { localStorage.setItem('spot', JSON.stringify(spot)); } catch { /* private mode: it just won't be remembered */ } }
   drag = null;
 });
-body.addEventListener('click', () => { if (justDragged) justDragged = false; else toggle(); });
+// Clicking only makes it react: a hop, a stretch that jiggles back, wide eyes and a small 'o' mouth.
+function poke() {
+  buddy.classList.add('poked');
+  p.vy -= 220;
+  p.sv += 8;
+  setTimeout(() => buddy.classList.remove('poked'), 450);
+}
+body.addEventListener('click', () => { if (justDragged) justDragged = false; else poke(); }); // a click is just a poke; listening starts only from the hotkeys
 body.addEventListener('contextmenu', (e) => { e.preventDefault(); window.jarvis.menu(); });
 
 // ---- The jelly: it stays where you put it (default bottom-right); a spring eases it there and a bouncier one drives the squash. ----
@@ -128,7 +134,6 @@ function frame(now) {
   const jx = reduceMotion ? 0 : 0.03 * Math.sin(t * 6), jy = reduceMotion ? 0 : 0.03 * Math.sin(t * 6 + 2);
   buddy.style.transform = `translate(${p.x - SIZE / 2}px, ${p.y - SIZE / 2 + bob}px)`;
   body.style.transform = `rotate(${angle}rad) scale(${1 + p.s + jx}, ${1 - p.s + jy}) rotate(${-angle + Math.max(-0.2, Math.min(0.2, p.vx * 0.0006))}rad)`;
-  body.style.borderRadius = [0, 1, 2, 3].map((i) => `${(22 + 5 * Math.sin(t * 3 + i * 1.7)) * K}px`).join(' ');
 
   // Eyes follow where it's heading, or the cursor when it's resting; look up when thinking.
   let lx = 0, ly = 0;
