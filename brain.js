@@ -7,6 +7,10 @@ const MAX_STEPS = 8; // opening a chat and typing in it takes several tool calls
 let gen = 0; // cancel() bumps this so a running task stops before its next action
 const cancel = () => { gen++; };
 const history = [];
+// Actions whose success needs no spoken words: when the model only calls these and they all worked, skip the second model call (about a second faster).
+const QUIET = new Set(['whatsapp_open_chat', 'focus_chrome_tab', 'open_app', 'open_url', 'web_search', 'set_volume', 'set_mute', 'lock_screen', 'set_clipboard', 'add_reminder']);
+// Anything that may need a follow-up step or a spoken answer (a question, "and/then", or words like send/type/write that continue after opening something) takes the normal two-call path.
+const ASKS_SOMETHING = /\?|\b(and|then|also|after|before|send|type|write|reply|text|tell|ask|say|read|check|click|press|play|search|find|what|how|when|who|where)\b/i;
 
 const system = () => `You are JARVIS, a witty, dry, impeccably polite British AI butler running on the user's Mac. \
 Address the user as "${process.env.JARVIS_USER_NAME || 'sir'}". Your replies are spoken aloud: keep them to one or two short sentences and give exactly one answer, never repeat yourself, \
@@ -51,16 +55,21 @@ async function ask(userText) {
   history.push({ role: 'user', content: userText });
   const messages = [{ role: 'system', content: system() }, ...history];
   let reply = '';
+  let quietOnly = !ASKS_SOMETHING.test(userText);
   for (let i = 0; i < MAX_STEPS; i++) {
     const msg = await chat(messages);
     messages.push(msg);
     if (!msg.tool_calls?.length) { reply = msg.content || ''; break; }
+    quietOnly = quietOnly && !msg.content && msg.tool_calls.every((c) => QUIET.has(c.function.name));
     for (const call of msg.tool_calls) {
       if (mine !== gen) return ''; // the user started talking again: stop acting
       let args = {};
       try { args = JSON.parse(call.function.arguments || '{}'); } catch { /* model sent bad JSON; tool will report missing args */ }
-      messages.push({ role: 'tool', tool_call_id: call.id, content: await runTool(call.function.name, args) });
+      const result = await runTool(call.function.name, args);
+      if (/^(Error|CONFIRMATION)/.test(result)) quietOnly = false; // failures and questions must reach the user
+      messages.push({ role: 'tool', tool_call_id: call.id, content: result });
     }
+    if (quietOnly) { reply = 'SILENT'; break; } // action done: no second model call needed
   }
   reply = reply || 'My apologies, I could not complete that.';
   history.push({ role: 'assistant', content: reply }); // tool chatter is dropped from memory on purpose

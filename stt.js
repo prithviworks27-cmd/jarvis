@@ -4,6 +4,8 @@ async function transcribe(buf) {
   form.append('file', new Blob([buf], { type: 'audio/webm' }), 'speech.webm');
   form.append('model', 'whisper-large-v3-turbo');
   form.append('language', 'en');
+  // Names the user says often (contacts etc.) so Whisper spells them right instead of guessing, e.g. "Rishabh" not "Risham".
+  if (process.env.JARVIS_VOCAB) form.append('prompt', `JARVIS. ${process.env.JARVIS_VOCAB}`);
   const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
