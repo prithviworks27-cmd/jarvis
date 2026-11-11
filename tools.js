@@ -196,6 +196,9 @@ end tell`),
   },
 };
 
+const control = require('./control')({ run, osa, fn });
+Object.assign(tools, control.tools);
+
 const definitions = Object.values(tools).map((t) => t.def);
 
 // Never throws: a failure becomes text the model can tell the user about.
@@ -208,4 +211,4 @@ async function runTool(name, args) {
   }
 }
 
-module.exports = { definitions, runTool };
+module.exports = { definitions, runTool, takePending: control.takePending };
