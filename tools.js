@@ -199,7 +199,7 @@ end tell`),
   },
 };
 
-const control = require('./control')({ run, osa, fn, describeScreen });
+const control = require('./control')({ run, osa, fn });
 Object.assign(tools, control.tools);
 
 const definitions = Object.values(tools).map((t) => t.def);
