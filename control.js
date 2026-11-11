@@ -9,7 +9,8 @@ const path = require('path');
 const crypto = require('crypto');
 
 const LOG = path.join(os.homedir(), 'Library/Logs/jarvis-actions.log');
-const RISKY_CLICK = /send|submit|buy|pay|purchase|order|delete|remove|confirm|transfer|post|publish|sign out|log out/i;
+const RISKY_WORDS = ['send', 'submit', 'buy', 'pay', 'purchase', 'order', 'delete', 'remove', 'confirm', 'transfer', 'post', 'publish', 'sign out', 'log out'];
+const RISKY_CLICK = new RegExp(RISKY_WORDS.join('|'), 'i');
 const KEYCODES = { return: 36, enter: 76, tab: 48, space: 49, delete: 51, escape: 53, left: 123, right: 124, down: 125, up: 126 };
 const MODS = { cmd: 'command', command: 'command', ctrl: 'control', control: 'control', alt: 'option', option: 'option', shift: 'shift' };
 
@@ -29,7 +30,7 @@ function keyScript(keys) {
 
 // Runs inside the Chrome tab. The label is embedded with JSON.stringify so it can never break out of its string.
 // With no match it returns the visible labels so the model can retry with the exact wording.
-const pageClickScript = (text, double) => `(() => {
+const pageClickScript = (text, double, confirmed = false) => `(() => {
   const words = (s) => String(s || '').toLowerCase().match(/[a-z0-9]+/g) || [];
   const qw = words(${JSON.stringify(String(text))}).filter((w) => !['my', 'the', 'a', 'an', 'that', 'this', 'file', 'document', 'doc', 'open'].includes(w));
   // every word asked for must match a label word (prefix either way, so "november" finds "Nov")
@@ -41,6 +42,8 @@ const pageClickScript = (text, double) => `(() => {
   const hits = els.filter((e) => matches(label(e))).sort((a, b) => label(a).length - label(b).length);
   if (!hits.length) return 'NOMATCH visible labels: ' + [...new Set(els.map(label).filter((t) => t && t.length < 60))].slice(0, 40).join(' | ');
   const el = hits[0];
+  // The check that matters is on what would be clicked, not on what was asked for.
+  if (${confirmed ? 'false' : 'true'} && new RegExp(${JSON.stringify(RISKY_WORDS.join('|'))}, 'i').test(label(el))) return 'RISKY ' + label(el);
   el.scrollIntoView({ block: 'center' });
   el.click();
   ${double ? "el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));" : ''}
@@ -56,8 +59,16 @@ module.exports = ({ run, osa, fn }) => {
   };
 
   // The model can never confirm for the user: the action is parked here and only the user's next "yes" (handled in brain.js) runs it.
-  const confirm = (description, run) => {
-    pending = { run, at: Date.now() };
+  // `where` names the place it was asked about (front app, or Chrome tab). If that changed before the "yes", nothing runs.
+  const confirm = async (description, run, where) => {
+    const asked = await where();
+    pending = {
+      at: Date.now(),
+      run: async () => {
+        if ((await where()) !== asked) throw new Error('You moved to a different place since I asked, so I did not do it.');
+        return run();
+      },
+    };
     return `CONFIRMATION REQUIRED, nothing has been done yet. Ask the user exactly: "${description} Shall I go ahead?" and wait for their answer.`;
   };
   const takePending = () => {
@@ -71,6 +82,9 @@ module.exports = ({ run, osa, fn }) => {
     const app = await frontApp();
     if (!allowedApps().includes(app.toLowerCase())) throw new Error(`I am not allowed to control ${app}. Allowed apps are ${allowedApps().join(', ')}.`);
     return app;
+  };
+  const stillInWhatsApp = async () => {
+    if ((await frontApp()).toLowerCase() !== 'whatsapp') throw new Error('You switched away from WhatsApp, so I stopped.');
   };
   const sysevents = (cmd) => osa(`tell application "System Events" to ${cmd}`);
 
@@ -137,6 +151,7 @@ end run`, query);
         const listBefore = list && await list().catch(() => null);
         const paneBefore = pane && await pane().catch(() => null);
 
+        await stillInWhatsApp(); // the user may have clicked elsewhere while we were measuring the window
         // Cmd+A first: if an old search is still in the box, typing must replace it, not append to it.
         await osa('on run argv\ntell application "System Events"\nkeystroke "f" using {command down}\ndelay 0.15\nkeystroke "a" using {command down}\ndelay 0.1\nkeystroke (item 1 of argv)\nend tell\nend run', name);
         const resultsSettled = listBefore ? await settles(list, listBefore, 2500) : (await sleep(2000), null);
@@ -144,12 +159,14 @@ end run`, query);
         // Down moves into the result list, Return opens the highlighted row. On this WhatsApp the first Down only moves focus and
         // highlights nothing, so keep pressing Down (max 3) until the list area visibly changes, i.e. the highlight ring appeared.
         // One Return only: a blind second one could send a draft message if the chat had in fact opened (or was already open).
+        await stillInWhatsApp();
         for (let i = 0; i < 3; i++) {
           await sysevents('key code 125');
           await sleep(300);
           if (!resultsSettled) { if (i === 1) break; continue; } // cannot watch the screen: two Downs, as observed
           if ((await list().catch(() => resultsSettled)) !== resultsSettled) break;
         }
+        await stillInWhatsApp(); // Return in the wrong app could submit a form or send a message
         await sysevents('key code 36');
         if (!paneBefore) { await sleep(800); return `Opened the WhatsApp chat for ${name}.`; } // cannot watch the screen: assume it worked
         if (await settles(pane, paneBefore, 2000)) return `Opened the WhatsApp chat for ${name}.`;
@@ -162,6 +179,7 @@ end run`, query);
         if (/[\r\n\t]/.test(text)) throw new Error('Only single-line text can be typed.');
         if ((await frontApp()).toLowerCase() !== 'whatsapp') { await osa('tell application "WhatsApp" to activate'); await new Promise((r) => setTimeout(r, 400)); }
         await requireAllowed();
+        await stillInWhatsApp();
         // Click the message box first so the text cannot land in the search field or the chat list.
         const [x, y, w, h] = (await osa('tell application "System Events" to tell process "WhatsApp" to return (position of window 1) & (size of window 1)')).split(',').map(Number);
         await run('osascript', ['-l', 'JavaScript', '-e', `ObjC.import('CoreGraphics');
@@ -170,6 +188,7 @@ function run(argv) {
   for (const t of [$.kCGEventLeftMouseDown, $.kCGEventLeftMouseUp]) $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent($(), t, p, $.kCGMouseButtonLeft));
 }`, String(Math.round(x + 0.68 * w)), String(Math.round(y + h - 26))]);
         await new Promise((r) => setTimeout(r, 150));
+        await stillInWhatsApp();
         await osa('on run argv\ntell application "System Events" to keystroke (item 1 of argv)\nend run', text);
         return 'Typed in the WhatsApp message box (not sent).';
       }),
@@ -196,7 +215,7 @@ end tell`);
       run: logged('press_keys', async ({ keys }) => {
         const script = keyScript(keys);
         const go = async () => { await requireAllowed(); await sysevents(script); return `Pressed ${keys}.`; };
-        if (/(^|\+)(return|enter)$/i.test(keys.trim())) return confirm(`Press ${keys} in ${await frontApp()}.`, go);
+        if (/(^|\+)(return|enter)$/i.test(keys.trim())) return confirm(`Press ${keys} in ${await frontApp()}.`, go, frontApp);
         return go();
       }),
     },
@@ -205,32 +224,54 @@ end tell`);
         { text: { type: 'string' }, double: { type: 'boolean' } }, ['text']),
       run: logged('click_in_chrome_page', async ({ text, double }) => {
         if (!allowedApps().includes('google chrome')) throw new Error('Google Chrome is not in the allowed apps list.');
-        const go = async () => {
+        const tabUrl = () => osa('tell application "Google Chrome" to return URL of active tab of front window');
+        const attempt = async (confirmed) => {
           let out;
           try {
-            out = await osa('on run argv\ntell application "Google Chrome" to tell active tab of front window to execute javascript (item 1 of argv)\nend run', pageClickScript(text, double));
+            out = await osa('on run argv\ntell application "Google Chrome" to tell active tab of front window to execute javascript (item 1 of argv)\nend run', pageClickScript(text, double, confirmed));
           } catch (e) {
             if (/turned off/i.test(e.message)) throw new Error('Chrome is blocking this. The user must turn on View > Developer > Allow JavaScript from Apple Events in Chrome.');
             throw e;
           }
           if (out.startsWith('NOMATCH')) throw new Error(out);
+          if (out.startsWith('RISKY ')) return confirm(`Click "${out.slice(6)}" on the Chrome page.`, () => attempt(true), tabUrl);
           return out;
         };
-        return RISKY_CLICK.test(text) ? confirm(`Click "${text}" on the Chrome page.`, go) : go();
+        return RISKY_CLICK.test(text) ? confirm(`Click "${text}" on the Chrome page.`, () => attempt(true), tabUrl) : attempt(false);
       }),
     },
     click_ui_element: {
       def: fn('click_ui_element', 'Click a button or row in a NATIVE app window (not a web page: use click_in_chrome_page for Chrome pages) by its visible label. The front app must be allowed. Can be slow in big windows.', { label: { type: 'string' } }, ['label']),
       run: logged('click_ui_element', async ({ label }) => {
-        const go = async () => {
+        // The script reports "RISKY <label>" instead of clicking when the element it found sounds dangerous and the user has not said yes.
+        const attempt = async (confirmed) => {
           await requireAllowed();
-          await osa(`on run argv
+          const out = await osa(`on run argv
 set q to item 1 of argv
+set confirmed to (item 2 of argv is "yes")
+set AppleScript's text item delimiters to "|"
+set riskyWords to text items of (item 3 of argv)
+set AppleScript's text item delimiters to ""
 tell application "System Events"
   tell (first application process whose frontmost is true)
     repeat with el in (entire contents of window 1)
       try
-        if ((name of el) contains q) or ((description of el) contains q) or ((title of el) contains q) then
+        set lbl to ""
+        try
+          set lbl to lbl & (name of el)
+        end try
+        try
+          set lbl to lbl & " " & (description of el)
+        end try
+        try
+          set lbl to lbl & " " & (title of el)
+        end try
+        if lbl contains q then
+          if not confirmed then
+            repeat with w in riskyWords
+              if lbl contains (w as text) then return "RISKY " & lbl
+            end repeat
+          end if
           try
             perform action "AXPress" of el
           on error
@@ -243,10 +284,11 @@ tell application "System Events"
   end tell
 end tell
 error "No element labelled " & q & " in the front window."
-end run`, label);
+end run`, label, confirmed ? 'yes' : 'no', RISKY_WORDS.join('|'));
+          if (out.startsWith('RISKY ')) return confirm(`Click "${out.slice(6).trim()}" in ${await frontApp()}.`, () => attempt(true), frontApp);
           return `Clicked "${label}".`;
         };
-        return RISKY_CLICK.test(label) ? confirm(`Click "${label}" in ${await frontApp()}.`, go) : go();
+        return RISKY_CLICK.test(label) ? confirm(`Click "${label}" in ${await frontApp()}.`, () => attempt(true), frontApp) : attempt(false);
       }),
     },
   };
