@@ -84,7 +84,7 @@ Needs the **Accessibility** permission (typing/clicking) and **Automation** for 
 - `control.js` acting inside other apps, with the safety rules
 - `speak.js` voices: Orpheus (Groq), offline Kokoro, macOS `say` fallback
 - `kokoro-worker.mjs` runs the Kokoro model in its own process
-- `index.html`, `renderer.js`, `style.css` the orb UI
+- `index.html`, `renderer.js`, `style.css` the on-screen character
 
 `npm test` checks the tool layer (no mic or key needed).
 
