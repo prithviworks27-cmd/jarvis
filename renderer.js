@@ -49,14 +49,40 @@ async function toggle() {
 
 window.jarvis.onToggle(toggle);
 window.jarvis.onState(({ state: s, ...rest }) => show(s, rest));
-body.addEventListener('click', toggle);
+// Drag the character to move it; a plain click (no drag) still talks to JARVIS.
+let drag = null;
+let justDragged = false;
+body.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  drag = { dx: p.x - e.clientX, dy: p.y - e.clientY, moved: false };
+  body.setPointerCapture(e.pointerId);
+});
+body.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  const x = e.clientX + drag.dx, y = e.clientY + drag.dy;
+  if (!drag.moved && Math.hypot(x - p.x, y - p.y) < 5) return;
+  drag.moved = true;
+  placedByUser = true;
+  spot.x = Math.min(Math.max(x, SIZE / 2), W - SIZE / 2);
+  spot.y = Math.min(Math.max(y, SIZE / 2), H - SIZE / 2);
+  p.x = spot.x; p.y = spot.y; p.vx = p.vy = 0; // follow the cursor tightly while dragging
+});
+body.addEventListener('pointerup', () => {
+  if (drag?.moved) { justDragged = true; try { localStorage.setItem('spot', JSON.stringify(spot)); } catch { /* private mode: it just won't be remembered */ } }
+  drag = null;
+});
+body.addEventListener('click', () => { if (justDragged) justDragged = false; else toggle(); });
 body.addEventListener('contextmenu', (e) => { e.preventDefault(); window.jarvis.menu(); });
 
-// ---- The jelly: a spring chases its target (home or the middle of the screen); a second, bouncier spring drives the squash. ----
+// ---- The jelly: it stays where you put it (default bottom-right); a spring eases it there and a bouncier one drives the squash. ----
 let W = innerWidth, H = innerHeight;
-addEventListener('resize', () => { W = innerWidth; H = innerHeight; });
-const home = () => ({ x: W - 70, y: H - 70 }); // where it rests when there's nothing to do
-const p = { x: home().x, y: home().y, vx: 0, vy: 0, tx: home().x, ty: home().y, s: 0, sv: 0 };
+const corner = () => ({ x: W - 70, y: H - 70 });
+let spot = corner();
+let placedByUser = false;
+try { const saved = JSON.parse(localStorage.getItem('spot')); if (saved && saved.x < W && saved.y < H) { spot = saved; placedByUser = true; } } catch { /* nothing saved yet */ }
+// The window gets its final size just after load, so re-aim the default corner whenever it changes.
+addEventListener('resize', () => { W = innerWidth; H = innerHeight; if (!placedByUser) spot = corner(); });
+const p = { x: spot.x, y: spot.y, vx: 0, vy: 0, tx: spot.x, ty: spot.y, s: 0, sv: 0 };
 const mouse = { x: -999, y: -999 };
 addEventListener('mousemove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
 
@@ -83,11 +109,7 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   const t = now / 1000;
-  const busy = state !== 'idle' || !bubble.hidden; // listening, thinking, speaking, or its answer is still on screen
-
-  // It only moves when it has a reason: to the middle while it listens, works or talks, then back home.
-  if (busy && !reduceMotion) { p.tx = W / 2; p.ty = H * 0.45; }
-  else { p.tx = home().x; p.ty = home().y; }
+  p.tx = spot.x; p.ty = spot.y; // it only moves when you drag it
 
   const ax = (p.tx - p.x) * 3 - p.vx * 2.2;
   const ay = (p.ty - p.y) * 3 - p.vy * 2.2;
