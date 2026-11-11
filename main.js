@@ -69,7 +69,10 @@ if (gotLock) app.whenReady().then(async () => {
   });
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.setIgnoreMouseEvents(true, { forward: true }); // the renderer turns this off while the cursor is over the character
-  screen.on('display-metrics-changed', () => win.setBounds(screenBounds()));
+  const fit = () => win.setBounds(screenBounds());
+  screen.on('display-metrics-changed', fit);
+  win.once('ready-to-show', fit); // macOS can nudge a screen-sized window off its spot; put it back
+  win.on('moved', fit);
   win.loadFile('index.html');
   app.dock?.hide(); // Siri-style: no Dock icon; right-click the character to quit
 
