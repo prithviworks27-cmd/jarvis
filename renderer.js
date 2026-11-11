@@ -7,6 +7,7 @@ const SIZE = 76; // keep in sync with --size in style.css
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 let rec = null;
+let starting = false; // true while waiting for mic permission
 let hideTimer;
 let state = 'idle';
 
@@ -26,10 +27,13 @@ function show(next, { you, jarvis, error } = {}) {
 
 async function toggle() {
   if (rec) return rec.stop();
+  if (starting) return; // a second press during the permission wait would orphan a recording and leave the mic on
+  starting = true;
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch {
+    starting = false;
     return show('idle', { error: 'Microphone blocked. Allow it in System Settings > Privacy & Security > Microphone.' });
   }
   window.jarvis.listenStarted();
@@ -42,13 +46,14 @@ async function toggle() {
     window.jarvis.sendAudio(await new Blob(chunks, { type: 'audio/webm' }).arrayBuffer());
   };
   rec.start();
+  starting = false;
   $('you').textContent = $('jarvis').textContent = '';
   show('listening');
 }
 
 window.jarvis.onToggle(toggle);
 window.jarvis.onState(({ state: s, ...rest }) => show(s, rest));
-// Drag the character to move it; a plain click (no drag) still talks to JARVIS.
+// Drag the character to move it.
 let drag = null;
 let justDragged = false;
 body.addEventListener('pointerdown', (e) => {

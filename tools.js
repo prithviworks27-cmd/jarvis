@@ -11,7 +11,6 @@ const run = (cmd, args) =>
 // Script args go through AppleScript's `argv`, never string-spliced into the script.
 const osa = (script, ...args) => run('osascript', ['-e', script, ...args]);
 
-
 const getJSON = async (url) => {
   const res = await fetch(url, { signal: AbortSignal.timeout(10000), headers: { 'User-Agent': 'jarvis-assistant/1.0' } });
   if (!res.ok) throw new Error(`${new URL(url).hostname} returned ${res.status}`);
@@ -25,7 +24,7 @@ const WEATHER = { 0: 'clear', 1: 'mostly clear', 2: 'partly cloudy', 3: 'overcas
 
 const decode = (s) => s.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 
-// Screenshot -> free Groq vision model -> text answer. Also used by control.js to check that an action worked.
+// Screenshot -> free Groq vision model -> text answer.
 async function describeScreen(question) {
   const file = path.join(os.tmpdir(), `jarvis-screen-${process.pid}.jpg`);
   try {

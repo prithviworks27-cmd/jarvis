@@ -2,6 +2,8 @@
 const assert = require('assert');
 const { definitions, runTool } = require('./tools');
 
+const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) => e.message);
+
 (async () => {
   assert.ok(definitions.length >= 10 && definitions.every((d) => d.function.name));
   assert.match(await runTool('open_url', { url: 'file:///etc/passwd' }), /^Error: Only http/);
@@ -48,5 +50,46 @@ const { definitions, runTool } = require('./tools');
   await fake.tools.press_keys.run({ keys: 'return' });
   await fake.takePending().run();
   assert.strictEqual(sent.length, 1, 'the key is pressed once, in the right app');
+  // Password-field rule in browsers: fail closed when the page cannot be asked (fake osa, nothing is typed).
+  let field = 'text';
+  const typed = [];
+  const browserOsa = async (script) => {
+    if (script.includes('frontmost is true')) return 'Google Chrome';
+    if (script.includes('AXSubrole')) return '';
+    if (script.includes('execute javascript')) { if (field === 'unavailable') throw new Error('Executing JavaScript through AppleScript is turned off.'); return field; }
+    typed.push(script); return '';
+  };
+  const browser = require('./control')({ run: async () => '', osa: browserOsa, fn: (name) => ({ function: { name } }) });
+  field = 'unavailable';
+  assert.match(await runWith(browser, 'type_text', { text: 'x' }), /cannot tell whether/);
+  field = 'password';
+  assert.match(await runWith(browser, 'type_text', { text: 'x' }), /password field/);
+  field = 'text';
+  assert.strictEqual(await runWith(browser, 'type_text', { text: 'x' }), 'Typed.');
+  assert.strictEqual(typed.length, 1, 'typed once, only into the ordinary box');
+
+  // The brain: only the user's own "yes" runs a parked action, and "Silent Hill" keeps its word.
+  const toolsPath = require.resolve('./tools');
+  const realTools = require.cache[toolsPath];
+  let yesParked = null;
+  let ran = 0;
+  require.cache[toolsPath] = { id: toolsPath, filename: toolsPath, loaded: true, exports: { definitions: [], runTool: async () => '', takePending: () => { const p = yesParked; yesParked = null; return p; } } };
+  const brain = require('./brain');
+  require.cache[toolsPath] = realTools;
+  const realFetch = global.fetch;
+  let modelSays = 'Hello, sir.';
+  global.fetch = async () => ({ status: 200, ok: true, json: async () => ({ choices: [{ message: { content: modelSays } }] }) });
+  try {
+    yesParked = { run: async () => { ran++; return 'Pressed return.'; } };
+    assert.strictEqual(await brain.ask('yes'), '');
+    assert.strictEqual(ran, 1, 'a yes runs the parked action');
+    yesParked = { run: async () => { ran++; return 'Pressed return.'; } };
+    assert.strictEqual(await brain.ask('what time is it'), 'Hello, sir.');
+    assert.strictEqual(ran, 1, 'anything else drops it without running');
+    modelSays = 'Silent Hill was directed by Christophe Gans, sir.SILENT';
+    assert.strictEqual(await brain.ask('who directed Silent Hill'), 'Silent Hill was directed by Christophe Gans, sir.');
+  } finally {
+    global.fetch = realFetch;
+  }
   console.log('ok');
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -14,6 +14,10 @@ const RISKY_CLICK = new RegExp(RISKY_WORDS.join('|'), 'i');
 const KEYCODES = { return: 36, enter: 76, tab: 48, space: 49, delete: 51, escape: 53, left: 123, right: 124, down: 125, up: 126 };
 const MODS = { cmd: 'command', command: 'command', ctrl: 'control', control: 'control', alt: 'option', option: 'option', shift: 'shift' };
 
+// What you type may be private, so the log records only how much was typed. Owner-only file.
+const TYPED = new Set(['type_text', 'type_in_whatsapp_chat']);
+try { fs.chmodSync(LOG, 0o600); } catch { /* no log yet */ }
+
 const allowedApps = () => (process.env.JARVIS_CONTROL_APPS || 'Google Chrome,Safari,WhatsApp,Spotify,Music,Notes').split(',').map((s) => s.trim().toLowerCase());
 
 // "cmd+f" -> `keystroke "f" using {command down}`; only validated pieces are ever put into the script.
@@ -50,10 +54,17 @@ const pageClickScript = (text, double, confirmed = false) => `(() => {
   return 'CLICKED ' + label(el).slice(0, 60);
 })()`;
 
+// In a browser the macOS accessibility check cannot see web pages, so ask the page itself. If it cannot answer, do not type.
+const FIELD_JS = "(() => { const e = document.activeElement; return e ? (e.tagName === 'IFRAME' ? 'iframe' : (e.type || e.tagName)) : ''; })()";
+
 module.exports = ({ run, osa, fn }) => {
   let pending = null;
 
-  const log = (tool, args, result) => fs.appendFile(LOG, `${new Date().toISOString()} ${tool} ${JSON.stringify(args)} -> ${String(result).slice(0, 150)}\n`, () => {});
+  const log = (tool, args, result) => {
+    const shown = TYPED.has(tool) ? { text: `<${String(args.text ?? '').length} chars>` } : args;
+    fs.appendFile(LOG, `${new Date().toISOString()} ${tool} ${JSON.stringify(shown)} -> ${String(result).slice(0, 150)}
+`, { mode: 0o600 }, () => {});
+  };
   const logged = (tool, run) => async (args) => {
     try { const r = await run(args); log(tool, args, r); return r; } catch (e) { log(tool, args, `ERROR ${e.message}`); throw e; }
   };
@@ -197,7 +208,7 @@ function run(argv) {
       def: fn('type_text', 'Type a single line of text into the focused field of the front app (it must be an allowed app). Never presses Return.', { text: { type: 'string' } }, ['text']),
       run: logged('type_text', async ({ text }) => {
         if (/[\r\n\t]/.test(text)) throw new Error('Only single-line text can be typed.');
-        await requireAllowed();
+        const app = (await requireAllowed()).toLowerCase();
         const role = await osa(`tell application "System Events" to tell (first application process whose frontmost is true)
 try
   return (value of attribute "AXSubrole" of (value of attribute "AXFocusedUIElement")) as text
@@ -206,6 +217,17 @@ on error
 end try
 end tell`);
         if (role === 'AXSecureTextField') throw new Error('That is a password field, so I will not type into it.');
+        if (app === 'google chrome' || app === 'safari') {
+          let kind;
+          try {
+            kind = await osa(app === 'safari'
+              ? 'on run argv\ntell application "Safari" to do JavaScript (item 1 of argv) in current tab of front window\nend run'
+              : 'on run argv\ntell application "Google Chrome" to tell active tab of front window to execute javascript (item 1 of argv)\nend run', FIELD_JS);
+          } catch {
+            throw new Error('I cannot tell whether that box is a password field, so I will not type there. Turn on JavaScript from Apple Events in the browser, or type it yourself.');
+          }
+          if (kind === 'password' || kind === 'iframe') throw new Error('That box is a password field or sits inside an embedded frame, so I will not type into it.');
+        }
         await osa('on run argv\ntell application "System Events" to keystroke (item 1 of argv)\nend run', text);
         return 'Typed.';
       }),
@@ -293,7 +315,7 @@ end run`, label, confirmed ? 'yes' : 'no', RISKY_WORDS.join('|'));
     },
   };
 
-  return { tools, takePending, keyScript };
+  return { tools, takePending };
 };
 module.exports.keyScript = keyScript;
 module.exports.pageClickScript = pageClickScript;
