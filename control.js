@@ -46,7 +46,7 @@ const pageClickScript = (text, double) => `(() => {
   return 'CLICKED ' + label(el).slice(0, 60);
 })()`;
 
-module.exports = ({ osa, fn }) => {
+module.exports = ({ osa, fn, describeScreen }) => {
   let pending = null;
 
   const log = (tool, args, result) => fs.appendFile(LOG, `${new Date().toISOString()} ${tool} ${JSON.stringify(args)} -> ${String(result).slice(0, 150)}\n`, () => {});
@@ -101,21 +101,23 @@ end run`, query);
     whatsapp_open_chat: {
       def: fn('whatsapp_open_chat', 'Open the WhatsApp chat with a person or group by name. Does not type or send anything in the chat.', { name: { type: 'string' } }, ['name']),
       run: logged('whatsapp_open_chat', async ({ name }) => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        // Search results appear a moment after typing, and arrow-down only highlights a row once they exist.
         await osa('tell application "WhatsApp" to activate');
-        await osa('delay 0.6');
+        await sleep(600);
         await requireAllowed();
-        await osa(`on run argv
-tell application "System Events"
-  keystroke "f" using {command down}
-  delay 0.4
-  keystroke (item 1 of argv)
-  delay 1.2
-  key code 125
-  delay 0.2
-  key code 36
-end tell
-end run`, name);
-        return `Opened the WhatsApp chat for ${name}.`;
+        await osa('on run argv\ntell application "System Events"\nkeystroke "f" using {command down}\ndelay 0.4\nkeystroke (item 1 of argv)\nend tell\nend run', name);
+        await sleep(2000);
+        // Look at the screen instead of trusting the keystrokes: retry the Down/Return pair if the chat did not open.
+        const opened = async () => /^\W*yes/i.test(await describeScreen(`Look at the WhatsApp window. Is the chat whose name contains "${name}" currently OPEN, meaning its name is in the header at the top of the right-hand conversation pane (not just in the search box or the result list)? Answer only YES or NO.`));
+        for (let attempt = 0; attempt < 2; attempt++) {
+          await sysevents('key code 125'); // down: highlights the first search result
+          await sleep(500);
+          await sysevents('key code 36'); // return: opens it
+          await sleep(1200);
+          if (await opened()) return `Opened the WhatsApp chat for ${name}.`;
+        }
+        throw new Error(`I searched WhatsApp for ${name} but could not confirm the chat opened.`);
       }),
     },
     type_text: {

@@ -25,6 +25,32 @@ const WEATHER = { 0: 'clear', 1: 'mostly clear', 2: 'partly cloudy', 3: 'overcas
 
 const decode = (s) => s.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 
+// Screenshot -> free Groq vision model -> text answer. Also used by control.js to check that an action worked.
+async function describeScreen(question) {
+  const file = path.join(os.tmpdir(), `jarvis-screen-${process.pid}.jpg`);
+  try {
+    await run('screencapture', ['-x', '-t', 'jpg', file]);
+    await run('sips', ['-Z', '1280', file]); // keeps the upload small and fast
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: process.env.JARVIS_VISION_MODEL || 'qwen/qwen3.8-27b',
+        messages: [{ role: 'user', content: [
+          { type: 'text', text: `${question || 'Describe the screen.'} Answer in at most three sentences.` },
+          { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + fs.readFileSync(file).toString('base64') } },
+        ] }],
+        max_completion_tokens: 400,
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!res.ok) throw new Error(`vision request failed (${res.status})`);
+    return (await res.json()).choices[0].message.content;
+  } finally {
+    fs.unlink(file, () => {});
+  }
+}
+
 const fn = (name, description, properties = {}, required = []) => ({
   type: 'function',
   function: { name, description, parameters: { type: 'object', properties, required } },
@@ -88,30 +114,7 @@ const tools = {
   look_at_screen: {
     def: fn('look_at_screen', 'Take a screenshot of the user\'s screen and answer a question about it. Use whenever they say "this", "what am I looking at", "read my screen", "help with this error", etc.',
       { question: { type: 'string', description: 'What to find out about the screen' } }, ['question']),
-    run: async ({ question }) => {
-      const file = path.join(os.tmpdir(), `jarvis-screen-${process.pid}.jpg`);
-      try {
-        await run('screencapture', ['-x', '-t', 'jpg', file]);
-        await run('sips', ['-Z', '1280', file]); // keeps the upload small and fast
-        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: process.env.JARVIS_VISION_MODEL || 'qwen/qwen3.8-27b',
-            messages: [{ role: 'user', content: [
-              { type: 'text', text: `${question || 'Describe the screen.'} Answer in at most three sentences.` },
-              { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + fs.readFileSync(file).toString('base64') } },
-            ] }],
-            max_completion_tokens: 400,
-          }),
-          signal: AbortSignal.timeout(30000),
-        });
-        if (!res.ok) throw new Error(`vision request failed (${res.status})`);
-        return (await res.json()).choices[0].message.content;
-      } finally {
-        fs.unlink(file, () => {});
-      }
-    },
+    run: ({ question }) => describeScreen(question),
   },
   set_volume: {
     def: fn('set_volume', 'Set system output volume, 0-100.', { level: { type: 'number' } }, ['level']),
@@ -196,7 +199,7 @@ end tell`),
   },
 };
 
-const control = require('./control')({ run, osa, fn });
+const control = require('./control')({ run, osa, fn, describeScreen });
 Object.assign(tools, control.tools);
 
 const definitions = Object.values(tools).map((t) => t.def);
