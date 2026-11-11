@@ -116,7 +116,8 @@ end run`, query);
         } catch { /* no window bounds */ }
         let before;
         try { before = snap && await snap(); } catch { snap = null; }
-        await osa('on run argv\ntell application "System Events"\nkeystroke "f" using {command down}\ndelay 0.15\nkeystroke (item 1 of argv)\nend tell\nend run', name);
+        // Cmd+A first: if an old search is still in the box, typing must replace it, not append to it.
+        await osa('on run argv\ntell application "System Events"\nkeystroke "f" using {command down}\ndelay 0.15\nkeystroke "a" using {command down}\ndelay 0.1\nkeystroke (item 1 of argv)\nend tell\nend run', name);
         if (snap) {
           let last = before, steady = 0;
           const t0 = Date.now();
