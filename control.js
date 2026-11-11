@@ -47,7 +47,7 @@ const pageClickScript = (text, double) => `(() => {
   return 'CLICKED ' + label(el).slice(0, 60);
 })()`;
 
-module.exports = ({ run, osa, fn, describeScreen }) => {
+module.exports = ({ run, osa, fn }) => {
   let pending = null;
 
   const log = (tool, args, result) => fs.appendFile(LOG, `${new Date().toISOString()} ${tool} ${JSON.stringify(args)} -> ${String(result).slice(0, 150)}\n`, () => {});
@@ -105,45 +105,55 @@ end run`, query);
         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         if ((await frontApp()).toLowerCase() !== 'whatsapp') { await osa('tell application "WhatsApp" to activate'); await sleep(300); }
         await requireAllowed();
-        // Press Down only once the result list has finished drawing: watch the list area of the window until it changes and then holds still.
-        // (A fixed wait was either too slow or too early.) If screenshots are unavailable, fall back to a fixed wait.
-        let snap = null;
+
+        // We judge progress by watching parts of the WhatsApp window change (cheap, no API call), not by fixed waits.
+        let snapOf = null;
         try {
           const [x, y, w, h] = (await osa('tell application "System Events" to tell process "WhatsApp" to return (position of window 1) & (size of window 1)')).split(',').map(Number);
-          const region = [x + 0.19 * w, y + 0.16 * h, 0.3 * w, 0.55 * h].map(Math.round).join(',');
           const file = path.join(os.tmpdir(), `jarvis-wa-${process.pid}.png`);
-          snap = async () => { await run('screencapture', ['-x', '-R', region, '-t', 'png', file]); return crypto.createHash('md5').update(fs.readFileSync(file)).digest('hex'); };
-        } catch { /* no window bounds */ }
-        let before;
-        try { before = snap && await snap(); } catch { snap = null; }
-        // Cmd+A first: if an old search is still in the box, typing must replace it, not append to it.
-        await osa('on run argv\ntell application "System Events"\nkeystroke "f" using {command down}\ndelay 0.15\nkeystroke "a" using {command down}\ndelay 0.1\nkeystroke (item 1 of argv)\nend tell\nend run', name);
-        if (snap) {
+          snapOf = (fx, fy, fw, fh) => async () => {
+            await run('screencapture', ['-x', '-R', [x + fx * w, y + fy * h, fw * w, fh * h].map(Math.round).join(','), '-t', 'png', file]);
+            return crypto.createHash('md5').update(fs.readFileSync(file)).digest('hex');
+          };
+        } catch { /* no window bounds: fixed waits below */ }
+        // Resolves with the area's hash once it has changed from `before` and then held still for two looks, else null.
+        const settles = async (snap, before, maxMs, looks = 2) => {
           let last = before, steady = 0;
           const t0 = Date.now();
           try {
-            while (Date.now() - t0 < 2500 && steady < 2) {
+            while (Date.now() - t0 < maxMs) {
               await sleep(100);
               const hash = await snap();
               steady = hash === last && hash !== before ? steady + 1 : 0;
               last = hash;
+              if (steady >= looks) return hash;
             }
-          } catch { await sleep(1500); }
-        } else await sleep(2000);
-        await sysevents('key code 125'); // down: highlights the first search result
-        await sleep(150);
-        await sysevents('key code 36'); // return: opens it
-        if (process.env.JARVIS_VERIFY !== '1') return `Opened the WhatsApp chat for ${name}.`;
-        // Slow but careful mode (JARVIS_VERIFY=1): look at the screen and retry once if the chat did not open.
-        const opened = async () => /^\W*yes/i.test(await describeScreen(`Look at the WhatsApp window. Is the chat whose name contains "${name}" currently OPEN, meaning its name is in the header at the top of the right-hand conversation pane (not just in the search box or the result list)? Answer only YES or NO.`));
-        for (let attempt = 0; attempt < 2; attempt++) {
-          await sleep(500);
-          let ok;
-          try { ok = await opened(); } catch { return `Pressed Return on the first WhatsApp result for ${name}, but I could not verify it opened.`; }
-          if (ok) return `Opened the WhatsApp chat for ${name}.`;
-          if (attempt === 0) { await sysevents('key code 125'); await sleep(500); await sysevents('key code 36'); await sleep(1200); }
+          } catch { /* screenshots failed */ }
+          return null;
+        };
+
+        const list = snapOf && snapOf(0.19, 0.16, 0.3, 0.55); // search results
+        const pane = snapOf && snapOf(0.52, 0.2, 0.45, 0.6); // the open conversation
+        const listBefore = list && await list().catch(() => null);
+        const paneBefore = pane && await pane().catch(() => null);
+
+        // Cmd+A first: if an old search is still in the box, typing must replace it, not append to it.
+        await osa('on run argv\ntell application "System Events"\nkeystroke "f" using {command down}\ndelay 0.15\nkeystroke "a" using {command down}\ndelay 0.1\nkeystroke (item 1 of argv)\nend tell\nend run', name);
+        const resultsSettled = listBefore ? await settles(list, listBefore, 2500) : (await sleep(2000), null);
+
+        // Down moves into the result list, Return opens the highlighted row. On this WhatsApp the first Down only moves focus and
+        // highlights nothing, so keep pressing Down (max 3) until the list area visibly changes, i.e. the highlight ring appeared.
+        // One Return only: a blind second one could send a draft message if the chat had in fact opened (or was already open).
+        for (let i = 0; i < 3; i++) {
+          await sysevents('key code 125');
+          await sleep(300);
+          if (!resultsSettled) { if (i === 1) break; continue; } // cannot watch the screen: two Downs, as observed
+          if ((await list().catch(() => resultsSettled)) !== resultsSettled) break;
         }
-        throw new Error(`I searched WhatsApp for ${name} but could not confirm the chat opened.`);
+        await sysevents('key code 36');
+        if (!paneBefore) { await sleep(800); return `Opened the WhatsApp chat for ${name}.`; } // cannot watch the screen: assume it worked
+        if (await settles(pane, paneBefore, 2000)) return `Opened the WhatsApp chat for ${name}.`;
+        throw new Error(`I searched WhatsApp for ${name} but could not confirm the chat opened. It may already have been open.`);
       }),
     },
     type_text: {
