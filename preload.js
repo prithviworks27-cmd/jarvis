@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld('jarvis', {
   onState: (cb) => ipcRenderer.on('state', (_e, s) => cb(s)),
   listenStarted: () => ipcRenderer.send('listen-start'),
   sendAudio: (buf) => ipcRenderer.send('audio', buf),
-  resize: (w, h) => ipcRenderer.send('resize', w, h),
+  interactive: (on) => ipcRenderer.send('interactive', on),
   menu: () => ipcRenderer.send('menu'),
   quit: () => ipcRenderer.send('quit'),
 });

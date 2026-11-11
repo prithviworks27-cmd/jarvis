@@ -9,12 +9,9 @@ const speech = require('./speak');
 try { process.loadEnvFile(path.join(__dirname, '.env')); } catch { /* no .env yet; handled in handleAudio */ }
 
 const HOTKEY = process.env.JARVIS_HOTKEY || 'Alt+Space';
-const ORB = 100; // orb-only window size; grows (left/up) to fit the reply bubble
 let win;
-const cornerBounds = (w, h) => {
-  const a = screen.getPrimaryDisplay().workArea;
-  return { x: a.x + a.width - w - 12, y: a.y + a.height - h - 12, width: w, height: h };
-};
+// One transparent, click-through window covers the screen so the character can roam anywhere in it.
+const screenBounds = () => screen.getPrimaryDisplay().workArea;
 // A second copy (e.g. autostart plus a manual `npm start`) would answer every question twice.
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
@@ -66,13 +63,15 @@ if (gotLock) app.whenReady().then(async () => {
   if (process.platform === 'darwin') await systemPreferences.askForMediaAccess('microphone');
 
   win = new BrowserWindow({
-    ...cornerBounds(ORB, ORB), frame: false, transparent: true, alwaysOnTop: true, hasShadow: false,
+    ...screenBounds(), frame: false, transparent: true, alwaysOnTop: true, hasShadow: false,
     resizable: false, skipTaskbar: true, focusable: false, // never steals focus from the app you're working in
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true },
   });
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.setIgnoreMouseEvents(true, { forward: true }); // the renderer turns this off while the cursor is over the character
+  screen.on('display-metrics-changed', () => win.setBounds(screenBounds()));
   win.loadFile('index.html');
-  app.dock?.hide(); // Siri-style: no Dock icon; right-click the orb to quit
+  app.dock?.hide(); // Siri-style: no Dock icon; right-click the character to quit
 
   if (!globalShortcut.register(HOTKEY, () => win.webContents.send('toggle'))) {
     console.error(`Could not register ${HOTKEY}; click the orb instead or set JARVIS_HOTKEY.`);
@@ -82,7 +81,7 @@ if (gotLock) app.whenReady().then(async () => {
   ipcMain.on('listen-start', () => speech.stop());
   ipcMain.on('audio', (_e, buf) => handleAudio(buf));
   ipcMain.on('quit', () => app.quit());
-  ipcMain.on('resize', (_e, w, h) => win.setBounds(cornerBounds(Math.max(ORB, Math.ceil(w)), Math.max(ORB, Math.ceil(h)))));
+  ipcMain.on('interactive', (_e, on) => win.setIgnoreMouseEvents(!on, { forward: true }));
   ipcMain.on('menu', () => Menu.buildFromTemplate([{ label: 'Quit JARVIS', click: () => app.quit() }]).popup({ window: win }));
 });
 
