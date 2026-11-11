@@ -78,13 +78,12 @@ if (gotLock) app.whenReady().then(async () => {
   app.dock?.hide(); // Siri-style: no Dock icon; right-click the character to quit
 
   if (!globalShortcut.register(HOTKEY, () => win.webContents.send('toggle'))) {
-    console.error(`Could not register ${HOTKEY}; click the orb instead or set JARVIS_HOTKEY.`);
+    console.error(`Could not register ${HOTKEY}; double-tap Control still works, or set JARVIS_HOTKEY.`);
   }
   startDoubleTap();
   speech.warm();
   ipcMain.on('listen-start', () => { speech.stop(); cancel(); }); // talking again also stops any action in progress
   ipcMain.on('audio', (_e, buf) => handleAudio(buf));
-  ipcMain.on('quit', () => app.quit());
   ipcMain.on('interactive', (_e, on) => win.setIgnoreMouseEvents(!on, { forward: true }));
   ipcMain.on('menu', () => Menu.buildFromTemplate([{ label: 'Quit JARVIS', click: () => app.quit() }]).popup({ window: win }));
 });
