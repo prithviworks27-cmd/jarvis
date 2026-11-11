@@ -6,6 +6,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 
 const LOG = path.join(os.homedir(), 'Library/Logs/jarvis-actions.log');
 const RISKY_CLICK = /send|submit|buy|pay|purchase|order|delete|remove|confirm|transfer|post|publish|sign out|log out/i;
@@ -46,7 +47,7 @@ const pageClickScript = (text, double) => `(() => {
   return 'CLICKED ' + label(el).slice(0, 60);
 })()`;
 
-module.exports = ({ osa, fn, describeScreen }) => {
+module.exports = ({ run, osa, fn, describeScreen }) => {
   let pending = null;
 
   const log = (tool, args, result) => fs.appendFile(LOG, `${new Date().toISOString()} ${tool} ${JSON.stringify(args)} -> ${String(result).slice(0, 150)}\n`, () => {});
@@ -104,19 +105,33 @@ end run`, query);
         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         if ((await frontApp()).toLowerCase() !== 'whatsapp') { await osa('tell application "WhatsApp" to activate'); await sleep(300); }
         await requireAllowed();
-        // One script for the whole sequence (no per-step process spawns). The wait lets search results render before Down highlights the first one.
-        const wait = Number(process.env.JARVIS_SEARCH_WAIT) || 1;
-        await osa(`on run argv
-tell application "System Events"
-  keystroke "f" using {command down}
-  delay 0.15
-  keystroke (item 1 of argv)
-  delay ${wait}
-  key code 125
-  delay 0.15
-  key code 36
-end tell
-end run`, name);
+        // Press Down only once the result list has finished drawing: watch the list area of the window until it changes and then holds still.
+        // (A fixed wait was either too slow or too early.) If screenshots are unavailable, fall back to a fixed wait.
+        let snap = null;
+        try {
+          const [x, y, w, h] = (await osa('tell application "System Events" to tell process "WhatsApp" to return (position of window 1) & (size of window 1)')).split(',').map(Number);
+          const region = [x + 0.19 * w, y + 0.16 * h, 0.3 * w, 0.55 * h].map(Math.round).join(',');
+          const file = path.join(os.tmpdir(), `jarvis-wa-${process.pid}.png`);
+          snap = async () => { await run('screencapture', ['-x', '-R', region, '-t', 'png', file]); return crypto.createHash('md5').update(fs.readFileSync(file)).digest('hex'); };
+        } catch { /* no window bounds */ }
+        let before;
+        try { before = snap && await snap(); } catch { snap = null; }
+        await osa('on run argv\ntell application "System Events"\nkeystroke "f" using {command down}\ndelay 0.15\nkeystroke (item 1 of argv)\nend tell\nend run', name);
+        if (snap) {
+          let last = before, steady = 0;
+          const t0 = Date.now();
+          try {
+            while (Date.now() - t0 < 2500 && steady < 2) {
+              await sleep(100);
+              const hash = await snap();
+              steady = hash === last && hash !== before ? steady + 1 : 0;
+              last = hash;
+            }
+          } catch { await sleep(1500); }
+        } else await sleep(2000);
+        await sysevents('key code 125'); // down: highlights the first search result
+        await sleep(150);
+        await sysevents('key code 36'); // return: opens it
         if (process.env.JARVIS_VERIFY !== '1') return `Opened the WhatsApp chat for ${name}.`;
         // Slow but careful mode (JARVIS_VERIFY=1): look at the screen and retry once if the chat did not open.
         const opened = async () => /^\W*yes/i.test(await describeScreen(`Look at the WhatsApp window. Is the chat whose name contains "${name}" currently OPEN, meaning its name is in the header at the top of the right-hand conversation pane (not just in the search box or the result list)? Answer only YES or NO.`));
