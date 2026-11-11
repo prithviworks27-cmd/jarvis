@@ -52,19 +52,13 @@ window.jarvis.onState(({ state: s, ...rest }) => show(s, rest));
 body.addEventListener('click', toggle);
 body.addEventListener('contextmenu', (e) => { e.preventDefault(); window.jarvis.menu(); });
 
-// ---- The wandering jelly: a spring chases a random target; a second, bouncier spring drives the squash. ----
+// ---- The jelly: a spring chases its target (home or the middle of the screen); a second, bouncier spring drives the squash. ----
 let W = innerWidth, H = innerHeight;
 addEventListener('resize', () => { W = innerWidth; H = innerHeight; });
-const p = { x: W - 110, y: H - 110, vx: 0, vy: 0, tx: W - 110, ty: H - 110, next: 0, s: 0, sv: 0 };
+const home = () => ({ x: W - 70, y: H - 70 }); // where it rests when there's nothing to do
+const p = { x: home().x, y: home().y, vx: 0, vy: 0, tx: home().x, ty: home().y, s: 0, sv: 0 };
 const mouse = { x: -999, y: -999 };
 addEventListener('mousemove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
-
-function pickTarget(now) {
-  const m = SIZE;
-  p.tx = m + Math.random() * (W - 2 * m);
-  p.ty = m + Math.random() * (H - 2 * m);
-  p.next = now + 2500 + Math.random() * 3500; // drift, linger, drift again
-}
 
 // Mouse events pass through the transparent window except over the character and its bubble.
 let interactive = false;
@@ -91,9 +85,9 @@ function frame(now) {
   const t = now / 1000;
   const busy = state !== 'idle' || !bubble.hidden; // listening, thinking, speaking, or its answer is still on screen
 
-  if (reduceMotion) { p.tx = W - 110; p.ty = H - 110; }
-  else if (busy) { p.tx = W / 2; p.ty = H * 0.45; } // wake up: glide to the middle and stay while it listens, works or talks
-  else if (now > p.next) pickTarget(now);
+  // It only moves when it has a reason: to the middle while it listens, works or talks, then back home.
+  if (busy && !reduceMotion) { p.tx = W / 2; p.ty = H * 0.45; }
+  else { p.tx = home().x; p.ty = home().y; }
 
   const ax = (p.tx - p.x) * 3 - p.vx * 2.2;
   const ay = (p.ty - p.y) * 3 - p.vy * 2.2;
