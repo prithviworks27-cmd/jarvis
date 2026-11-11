@@ -49,6 +49,7 @@ async function handleAudio(buf) {
     send({ state: 'thinking', you });
     const jarvis = await ask(you);
     console.log(`timing: speech-to-text ${t1 - t0}ms, brain ${Date.now() - t1}ms`);
+    if (!jarvis) return send({ state: 'idle', you }); // an action that needs no words
     send({ state: 'speaking', you, jarvis });
     await speech.speak(jarvis);
     send({ state: 'idle', you, jarvis });

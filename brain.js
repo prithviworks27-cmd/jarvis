@@ -9,6 +9,7 @@ const history = [];
 const system = () => `You are JARVIS, a witty, dry, impeccably polite British AI butler running on the user's Mac. \
 Address the user as "${process.env.JARVIS_USER_NAME || 'sir'}". Your replies are spoken aloud: keep them to one or two short sentences and give exactly one answer, never repeat yourself, \
 no lists, no markdown, no emoji. Use tools to act; never claim you did something a tool did not confirm. \
+Speak only when there is something the user needs to hear. If the request was an action (open an app or site, search the web, volume, mute, lock the screen, clipboard, add a reminder) and the tool succeeded, reply with exactly SILENT and nothing else. If a tool failed, say so in one short sentence. Questions and information requests (time, date, weather, news, mail, calendar, reminder list, facts, what is on the screen) get a spoken answer. If the user asks for both, answer only the information part. \
 For anything current (weather, news, sports, recent events) or facts you are unsure of, call news, weather or wikipedia and answer from their results; summarise in your own words. If a tool returns an error, say so briefly. Current date and time: ${new Date().toString()}.`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -53,7 +54,8 @@ async function ask(userText) {
   reply = reply || 'My apologies, I could not complete that.';
   history.push({ role: 'assistant', content: reply }); // tool chatter is dropped from memory on purpose
   if (history.length > MAX_HISTORY) history.splice(0, history.length - MAX_HISTORY);
-  return reply;
+  // SILENT means "an action was done, say nothing"; the model sometimes tacks it onto a real answer, so strip it anywhere.
+  return reply.replace(/SILENT/gi, '').trim();
 }
 
 module.exports = { ask };
