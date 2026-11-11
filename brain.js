@@ -75,7 +75,8 @@ async function ask(userText) {
   history.push({ role: 'assistant', content: reply }); // tool chatter is dropped from memory on purpose
   if (history.length > MAX_HISTORY) history.splice(0, history.length - MAX_HISTORY);
   // SILENT means "an action was done, say nothing"; the model sometimes tacks it onto a real answer, so strip it anywhere.
-  return reply.replace(/SILENT/gi, '').trim();
+  // Uppercase only, so a real answer about "Silent Hill" or a silent letter keeps its word.
+  return reply.replace(/SILENT/g, '').trim();
 }
 
 module.exports = { ask, cancel };

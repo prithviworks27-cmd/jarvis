@@ -3,6 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const readline = require('readline');
+const crypto = require('crypto');
 
 let current; // the playing afplay/say process
 let gen = 0; // bumped by stop() so an in-flight speak() knows to quit
@@ -13,8 +14,8 @@ function stop() {
   current = null;
 }
 
-// Engine 1: Groq-hosted Orpheus (free tier, same key as the brain). One sentence per request keeps the first word fast.
-async function orpheus(text, i) {
+// Engine 1: Groq-hosted Orpheus (free tier, same key as the brain). Free tier allows ~100 requests a day, so short replies go in one request.
+async function orpheus(text) {
   const res = await fetch('https://api.groq.com/openai/v1/audio/speech', {
     method: 'POST',
     headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
@@ -22,7 +23,8 @@ async function orpheus(text, i) {
     signal: AbortSignal.timeout(15000),
   });
   if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 200)}`);
-  const file = path.join(os.tmpdir(), `jarvis-orpheus-${process.pid}-${i}.wav`);
+  // Unique name: an interrupted reply's late download must never overwrite the next reply's file.
+  const file = path.join(os.tmpdir(), `jarvis-orpheus-${crypto.randomUUID()}.wav`);
   fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
   return file;
 }
@@ -79,23 +81,31 @@ const run = (cmd, args, input) =>
 // Text goes over stdin so a reply starting with "-" is never read as a flag.
 const say = (text) => run('say', ['-v', process.env.JARVIS_VOICE || 'Daniel', '-f', '-'], text);
 
+const drop = (p) => p.then((f) => fs.unlink(f, () => {}), () => {}); // delete a file we ended up not playing
+
 // Plays parts[from..] with one engine, synthesizing the next sentence while the current one plays.
 // Returns the index it reached: parts.length when finished or interrupted, lower when the engine failed.
 async function playWith(synth, parts, from, mine) {
   let i = from;
+  let next;
   try {
-    let next = synth(parts[i], i);
+    next = synth(parts[i], i);
     next.catch(() => {}); // surfaced when awaited below
     for (; i < parts.length; i++) {
       const file = await next;
-      if (mine !== gen) return parts.length;
-      if (i + 1 < parts.length) { next = synth(parts[i + 1], i + 1); next.catch(() => {}); }
-      await run('afplay', [file]);
-      fs.unlink(file, () => {});
-      if (mine !== gen) return parts.length;
+      next = undefined;
+      try {
+        if (mine !== gen) return parts.length;
+        if (i + 1 < parts.length) { next = synth(parts[i + 1], i + 1); next.catch(() => {}); }
+        await run('afplay', [file]);
+      } finally {
+        fs.unlink(file, () => {});
+      }
+      if (mine !== gen) { if (next) drop(next); return parts.length; }
     }
     return parts.length;
   } catch (e) {
+    if (next) drop(next);
     console.error(`${synth.name} voice failed, trying the next one:`, e.message);
     return i;
   }
@@ -107,7 +117,8 @@ async function speak(text) {
   const mine = gen;
   const clean = text.replace(/[*_`#>]/g, '').trim();
   if (!clean) return;
-  const parts = clean.split(/(?<=[.!?])\s+/); // split after sentence ends only, so "25.8 degrees" stays whole
+  // Short replies: one request. Long ones: sentence by sentence (split after sentence ends only, so "25.8 degrees" stays whole).
+  const parts = clean.length <= 400 ? [clean] : clean.split(/(?<=[.!?])\s+/);
   const mode = process.env.JARVIS_TTS;
   const chain = mode === 'say' ? [] : mode === 'kokoro' ? [kokoro] : [orpheus, kokoro];
 
