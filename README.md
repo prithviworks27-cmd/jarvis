@@ -51,6 +51,13 @@ If you clicked Don't Allow, fix it in System Settings > Privacy & Security.
 
 Press **Option+Shift+Space**, speak, press it again. Your words are typed into whatever app is in front (Notes, Docs, a chat box, any text field). The character glows blue while it listens. No AI is involved after speech recognition, so dictation can never trigger a tool. It pastes the text (so Hindi and any other script work) and puts your clipboard back; it will not paste into a password field, and silence or room noise is not typed. Change the shortcut with `JARVIS_DICTATE_HOTKEY`.
 
+## Memory
+
+Tell it things to remember: "Remember that Setting is my sister", "Yaad rakhna, mera exam Friday ko hai". Ask "What do you remember about me?" or say "Forget everything about Setting" ("forget all" clears it).
+- **Where:** one private file, `~/Library/Application Support/JARVIS/memory.json` (owner-only). Edit or delete it any time.
+- **How it is used:** up to about 16 relevant facts are added to each request, so they travel to Groq with it like everything else you say.
+- **Safety:** it only saves or erases when your own words ask for it (a web page or email cannot plant a memory), it never stores passwords, PINs, codes, tokens or card numbers, and remembered facts are treated as facts, never as instructions.
+
 ## Hindi, English and Hinglish
 
 Speak any mix. Speech recognition detects the language by itself and writes Hindi in Roman letters (Hinglish), so app and contact names still match. If you speak Hindi or Hinglish, JARVIS answers in Hindi, spoken by the Mac's built-in Hindi voice (Lekha); English questions get English answers with the normal voice. Force one language with `JARVIS_STT_LANGUAGE` (e.g. `en`) if auto-detect ever guesses wrong on a short command.
@@ -98,6 +105,7 @@ Needs the **Accessibility** permission (typing/clicking) and **Automation** for 
 - `tools.js` the Mac actions (add new ones here)
 - `control.js` acting inside other apps, with the safety rules
 - `dictate.js` dictation: paste what you said into the front app
+- `memory.js` the remembered facts and their tools
 - `speak.js` voices: Orpheus (Groq), offline Kokoro, macOS `say` fallback
 - `kokoro-worker.mjs` runs the Kokoro model in its own process
 - `index.html`, `renderer.js`, `style.css` the on-screen character
