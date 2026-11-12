@@ -61,9 +61,9 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
     if (script.includes('frontmost is true')) return 'Google Chrome';
     if (script.includes('AXSubrole')) return '';
     if (script.includes('execute javascript')) { if (field === 'unavailable') throw new Error('Executing JavaScript through AppleScript is turned off.'); return field; }
-    typed.push(script); return '';
+    return '';
   };
-  const browser = require('./control')({ run: async () => '', osa: browserOsa, fn: (name) => ({ function: { name } }) });
+  const browser = require('./control')({ run: async () => '', osa: browserOsa, paste: async (text) => { typed.push(text); }, fn: (name) => ({ function: { name } }) });
   field = 'unavailable';
   assert.match(await runWith(browser, 'type_text', { text: 'x' }), /cannot tell whether/);
   field = 'password';

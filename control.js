@@ -8,6 +8,8 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { closest } = require('./fuzzy');
+const { ensure } = require('./helpers');
+const { paste: realPaste } = require('./dictate');
 
 const LOG = path.join(os.homedir(), 'Library/Logs/jarvis-actions.log');
 const RISKY_WORDS = ['send', 'submit', 'buy', 'pay', 'purchase', 'order', 'delete', 'remove', 'confirm', 'transfer', 'post', 'publish', 'sign out', 'log out'];
@@ -16,7 +18,7 @@ const KEYCODES = { return: 36, enter: 76, tab: 48, space: 49, delete: 51, escape
 const MODS = { cmd: 'command', command: 'command', ctrl: 'control', control: 'control', alt: 'option', option: 'option', shift: 'shift' };
 
 // What you type may be private, so the log records only how much was typed. Owner-only file.
-const TYPED = new Set(['type_text', 'type_in_whatsapp_chat']);
+const TYPED = new Set(['type_text', 'type_in_whatsapp_chat', 'whatsapp_type_to']);
 try { fs.chmodSync(LOG, 0o600); } catch { /* no log yet */ }
 
 const allowedApps = () => (process.env.JARVIS_CONTROL_APPS || 'Google Chrome,Safari,WhatsApp,Spotify,Music,Notes').split(',').map((s) => s.trim().toLowerCase());
@@ -58,7 +60,7 @@ const pageClickScript = (text, double, confirmed = false) => `(() => {
 // In a browser the macOS accessibility check cannot see web pages, so ask the page itself. If it cannot answer, do not type.
 const FIELD_JS = "(() => { const e = document.activeElement; return e ? (e.tagName === 'IFRAME' ? 'iframe' : (e.type || e.tagName)) : ''; })()";
 
-module.exports = ({ run, osa, fn }) => {
+module.exports = ({ run, osa, fn, paste = realPaste }) => {
   let pending = null;
 
   const log = (tool, args, result) => {
@@ -106,6 +108,124 @@ module.exports = ({ run, osa, fn }) => {
   };
   const sysevents = (cmd) => osa(`tell application "System Events" to ${cmd}`);
 
+  // ---- WhatsApp ----
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const norm = (t) => t.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  const waWindow = async () => {
+    const [x, y, w, h] = (await osa('tell application "System Events" to tell process "WhatsApp" to return (position of window 1) & (size of window 1)')).split(',').map(Number);
+    return { x, y, w, h };
+  };
+  const waFront = async () => {
+    if ((await frontApp()).toLowerCase() !== 'whatsapp') {
+      await osa('tell application "WhatsApp" to activate');
+      // With Stage Manager the window can take a moment to come back: wait until it exists, not a fixed time.
+      for (let i = 0; i < 20; i++) {
+        await sleep(100);
+        if ((await frontApp()).toLowerCase() === 'whatsapp' && Number(await osa('tell application "System Events" to tell process "WhatsApp" to return count of windows')) > 0) break;
+      }
+    }
+    await requireAllowed();
+  };
+  // Reads text in a part of the screen with the Mac's own OCR (free, on-device, about 0.3 s).
+  const ocr = async (x, y, w, h) => {
+    const bin = await ensure('ocr');
+    const file = path.join(os.tmpdir(), `jarvis-ocr-${crypto.randomUUID()}.png`);
+    try {
+      await run('screencapture', ['-x', '-R', [x, y, w, h].map(Math.round).join(','), '-t', 'png', file]);
+      return await run(bin, [file]);
+    } finally {
+      fs.unlink(file, () => {});
+    }
+  };
+  // Is this person's chat the open one? The header of the conversation shows its name. null = could not read the screen.
+  const headerHas = async (name, win) => {
+    try { return norm(await ocr(win.x + 0.5 * win.w, win.y, 0.5 * win.w, 0.07 * win.h)).includes(norm(name)); } catch { return null; }
+  };
+  // "Risham" -> "Rishabh": keep the name if it is part of a known one, otherwise take the one that sounds closest.
+  const resolveName = async (heard) => {
+    const known = [...(process.env.JARVIS_VOCAB || '').split(',').map((x) => x.trim()).filter(Boolean), ...(await contactNames())];
+    return known.some((k) => k.toLowerCase().includes(heard.toLowerCase())) ? heard : closest(heard, known) || heard;
+  };
+
+  async function openChat(name) {
+    await waFront();
+    const win = await waWindow();
+    const already = await headerHas(name, win);
+    if (already) return `The WhatsApp chat for ${name} is already open.`;
+
+    // Fallback when the screen cannot be read: judge progress by parts of the window changing instead.
+    const file = path.join(os.tmpdir(), `jarvis-wa-${process.pid}.png`);
+    const snapOf = (fx, fy, fw, fh) => async () => {
+      await run('screencapture', ['-x', '-R', [win.x + fx * win.w, win.y + fy * win.h, fw * win.w, fh * win.h].map(Math.round).join(','), '-t', 'png', file]);
+      return crypto.createHash('md5').update(fs.readFileSync(file)).digest('hex');
+    };
+    // Resolves with the area's hash once it has changed from `before` and then held still for two looks, else null.
+    const settles = async (snap, before, maxMs, looks = 2) => {
+      let last = before, steady = 0;
+      const t0 = Date.now();
+      try {
+        while (Date.now() - t0 < maxMs) {
+          await sleep(100);
+          const hash = await snap();
+          steady = hash === last && hash !== before ? steady + 1 : 0;
+          last = hash;
+          if (steady >= looks) return hash;
+        }
+      } catch { /* screenshots failed */ }
+      return null;
+    };
+    const list = snapOf(0.19, 0.16, 0.3, 0.55); // search results
+    const pane = snapOf(0.52, 0.2, 0.45, 0.6); // the open conversation
+    const listBefore = await list().catch(() => null);
+    const paneBefore = await pane().catch(() => null);
+
+    await stillInWhatsApp(); // the user may have clicked elsewhere while we were measuring the window
+    // Cmd+A first: if an old search is still in the box, typing must replace it, not append to it.
+    await osa('on run argv\ntell application "System Events"\nkeystroke "f" using {command down}\ndelay 0.15\nkeystroke "a" using {command down}\ndelay 0.1\nkeystroke (item 1 of argv)\nend tell\nend run', name);
+    const resultsSettled = listBefore ? await settles(list, listBefore, 2500) : (await sleep(2000), null);
+
+    // Down moves into the result list, Return opens the highlighted row. On this WhatsApp the first Down only moves focus and
+    // highlights nothing, so keep pressing Down (max 3) until the list area visibly changes, i.e. the highlight ring appeared.
+    // One Return only: a blind second one could send a draft message if the chat had in fact opened.
+    await stillInWhatsApp();
+    for (let i = 0; i < 3; i++) {
+      await sysevents('key code 125');
+      await sleep(300);
+      if (!resultsSettled) { if (i === 1) break; continue; } // cannot watch the screen: two Downs, as observed
+      if ((await list().catch(() => resultsSettled)) !== resultsSettled) break;
+    }
+    await stillInWhatsApp(); // Return in the wrong app could submit a form or send a message
+    await sysevents('key code 36');
+
+    if (already === null) { // OCR unavailable: the old heuristic
+      if (!paneBefore) { await sleep(800); return `Opened the WhatsApp chat for ${name}.`; }
+      if (await settles(pane, paneBefore, 2000)) return `Opened the WhatsApp chat for ${name}.`;
+    } else {
+      for (let i = 0; i < 6; i++) { // the header names the chat once it is open
+        if (await headerHas(name, win)) return `Opened the WhatsApp chat for ${name}.`;
+        await sleep(150);
+      }
+    }
+    throw new Error(`I searched WhatsApp for ${name} but the chat did not open (maybe no chat has that name). Do not try again; tell the user.`);
+  }
+
+  async function typeInChat(text, knownWindow) {
+    if (/[\r\n\t]/.test(text)) throw new Error('Only single-line text can be typed.');
+    if (!knownWindow) await waFront(); // right after openChat, WhatsApp is already in front
+    await stillInWhatsApp();
+    // Click the message box first so the text cannot land in the search field or the chat list.
+    const { x, y, w, h } = knownWindow || await waWindow();
+    await run('osascript', ['-l', 'JavaScript', '-e', `ObjC.import('CoreGraphics');
+function run(argv) {
+  const p = $.CGPointMake(Number(argv[0]), Number(argv[1]));
+  for (const t of [$.kCGEventLeftMouseDown, $.kCGEventLeftMouseUp]) $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent($(), t, p, $.kCGMouseButtonLeft));
+}`, String(Math.round(x + 0.68 * w)), String(Math.round(y + h - 26))]);
+    await sleep(100);
+    await stillInWhatsApp();
+    await paste(text); // pasting is instant; typing key by key took seconds
+    return 'Typed in the WhatsApp message box (not sent).';
+  }
+
   const tools = {
     focus_chrome_tab: {
       def: fn('focus_chrome_tab', 'Switch to an already open Google Chrome tab whose title or address contains the text.', { query: { type: 'string' } }, ['query']),
@@ -132,86 +252,19 @@ end run`, query);
       }),
     },
     whatsapp_open_chat: {
-      def: fn('whatsapp_open_chat', 'Open the WhatsApp chat with a person or group by name. Does not type or send anything in the chat.', { name: { type: 'string' } }, ['name']),
-      run: logged('whatsapp_open_chat', async ({ name: heard }) => {
-        // "Risham" -> "Rishabh": keep the name if it is part of a known one, otherwise take the one that sounds closest.
-        const known = [...(process.env.JARVIS_VOCAB || '').split(',').map((x) => x.trim()).filter(Boolean), ...(await contactNames())];
-        const name = known.some((k) => k.toLowerCase().includes(heard.toLowerCase())) ? heard : closest(heard, known) || heard;
-        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-        if ((await frontApp()).toLowerCase() !== 'whatsapp') { await osa('tell application "WhatsApp" to activate'); await sleep(300); }
-        await requireAllowed();
-
-        // We judge progress by watching parts of the WhatsApp window change (cheap, no API call), not by fixed waits.
-        let snapOf = null;
-        try {
-          const [x, y, w, h] = (await osa('tell application "System Events" to tell process "WhatsApp" to return (position of window 1) & (size of window 1)')).split(',').map(Number);
-          const file = path.join(os.tmpdir(), `jarvis-wa-${process.pid}.png`);
-          snapOf = (fx, fy, fw, fh) => async () => {
-            await run('screencapture', ['-x', '-R', [x + fx * w, y + fy * h, fw * w, fh * h].map(Math.round).join(','), '-t', 'png', file]);
-            return crypto.createHash('md5').update(fs.readFileSync(file)).digest('hex');
-          };
-        } catch { /* no window bounds: fixed waits below */ }
-        // Resolves with the area's hash once it has changed from `before` and then held still for two looks, else null.
-        const settles = async (snap, before, maxMs, looks = 2) => {
-          let last = before, steady = 0;
-          const t0 = Date.now();
-          try {
-            while (Date.now() - t0 < maxMs) {
-              await sleep(100);
-              const hash = await snap();
-              steady = hash === last && hash !== before ? steady + 1 : 0;
-              last = hash;
-              if (steady >= looks) return hash;
-            }
-          } catch { /* screenshots failed */ }
-          return null;
-        };
-
-        const list = snapOf && snapOf(0.19, 0.16, 0.3, 0.55); // search results
-        const pane = snapOf && snapOf(0.52, 0.2, 0.45, 0.6); // the open conversation
-        const listBefore = list && await list().catch(() => null);
-        const paneBefore = pane && await pane().catch(() => null);
-
-        await stillInWhatsApp(); // the user may have clicked elsewhere while we were measuring the window
-        // Cmd+A first: if an old search is still in the box, typing must replace it, not append to it.
-        await osa('on run argv\ntell application "System Events"\nkeystroke "f" using {command down}\ndelay 0.15\nkeystroke "a" using {command down}\ndelay 0.1\nkeystroke (item 1 of argv)\nend tell\nend run', name);
-        const resultsSettled = listBefore ? await settles(list, listBefore, 2500) : (await sleep(2000), null);
-
-        // Down moves into the result list, Return opens the highlighted row. On this WhatsApp the first Down only moves focus and
-        // highlights nothing, so keep pressing Down (max 3) until the list area visibly changes, i.e. the highlight ring appeared.
-        // One Return only: a blind second one could send a draft message if the chat had in fact opened (or was already open).
-        await stillInWhatsApp();
-        for (let i = 0; i < 3; i++) {
-          await sysevents('key code 125');
-          await sleep(300);
-          if (!resultsSettled) { if (i === 1) break; continue; } // cannot watch the screen: two Downs, as observed
-          if ((await list().catch(() => resultsSettled)) !== resultsSettled) break;
-        }
-        await stillInWhatsApp(); // Return in the wrong app could submit a form or send a message
-        await sysevents('key code 36');
-        if (!paneBefore) { await sleep(800); return `Opened the WhatsApp chat for ${name}.`; } // cannot watch the screen: assume it worked
-        if (await settles(pane, paneBefore, 2000)) return `Opened the WhatsApp chat for ${name}.`;
-        throw new Error(`I searched WhatsApp for ${name} but could not confirm the chat opened. It may already have been open.`);
-      }),
+      def: fn('whatsapp_open_chat', 'Open the WhatsApp chat with a person or group by name (instant if it is already open). Does not type or send anything. If it fails, do not retry: tell the user.', { name: { type: 'string' } }, ['name']),
+      run: logged('whatsapp_open_chat', async ({ name }) => openChat(await resolveName(name))),
     },
     type_in_whatsapp_chat: {
       def: fn('type_in_whatsapp_chat', 'Type text into the message box of the WhatsApp chat that is currently open, without sending it. Use when the user says to type in this chat.', { text: { type: 'string' } }, ['text']),
-      run: logged('type_in_whatsapp_chat', async ({ text }) => {
-        if (/[\r\n\t]/.test(text)) throw new Error('Only single-line text can be typed.');
-        if ((await frontApp()).toLowerCase() !== 'whatsapp') { await osa('tell application "WhatsApp" to activate'); await new Promise((r) => setTimeout(r, 400)); }
-        await requireAllowed();
-        await stillInWhatsApp();
-        // Click the message box first so the text cannot land in the search field or the chat list.
-        const [x, y, w, h] = (await osa('tell application "System Events" to tell process "WhatsApp" to return (position of window 1) & (size of window 1)')).split(',').map(Number);
-        await run('osascript', ['-l', 'JavaScript', '-e', `ObjC.import('CoreGraphics');
-function run(argv) {
-  const p = $.CGPointMake(Number(argv[0]), Number(argv[1]));
-  for (const t of [$.kCGEventLeftMouseDown, $.kCGEventLeftMouseUp]) $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent($(), t, p, $.kCGMouseButtonLeft));
-}`, String(Math.round(x + 0.68 * w)), String(Math.round(y + h - 26))]);
-        await new Promise((r) => setTimeout(r, 150));
-        await stillInWhatsApp();
-        await osa('on run argv\ntell application "System Events" to keystroke (item 1 of argv)\nend run', text);
-        return 'Typed in the WhatsApp message box (not sent).';
+      run: logged('type_in_whatsapp_chat', async ({ text }) => typeInChat(text)),
+    },
+    whatsapp_type_to: {
+      def: fn('whatsapp_type_to', 'Open the WhatsApp chat with a person (instant if already open) and type a message in it WITHOUT sending. Use for "type/write hi to Rishabh". Sending needs a separate press of return, which the user confirms.', { name: { type: 'string' }, text: { type: 'string' } }, ['name', 'text']),
+      run: logged('whatsapp_type_to', async ({ name, text }) => {
+        const win = await waWindow().catch(() => null);
+        const opened = await openChat(await resolveName(name));
+        return `${opened} ${await typeInChat(text, win && await waWindow())}`;
       }),
     },
     type_text: {
@@ -238,7 +291,7 @@ end tell`);
           }
           if (kind === 'password' || kind === 'iframe') throw new Error('That box is a password field or sits inside an embedded frame, so I will not type into it.');
         }
-        await osa('on run argv\ntell application "System Events" to keystroke (item 1 of argv)\nend run', text);
+        await paste(text);
         return 'Typed.';
       }),
     },

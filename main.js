@@ -2,6 +2,8 @@ const { app, BrowserWindow, Menu, globalShortcut, ipcMain, screen, session, syst
 const path = require('path');
 const fs = require('fs');
 const { execFile, spawn } = require('child_process');
+const os = require('os');
+const { ensure } = require('./helpers');
 const { transcribe } = require('./stt');
 const { ask, cancel } = require('./brain');
 const speech = require('./speak');
@@ -21,20 +23,22 @@ if (!gotLock) app.quit();
 let helper;
 // Double-tap Control: a tiny Swift helper watches the modifier key (Electron's globalShortcut can't do modifier-only keys).
 function startDoubleTap() {
-  const src = path.join(__dirname, 'helpers/doubletap.swift');
-  const bin = path.join(__dirname, 'bin/doubletap');
-  const launch = () => {
+  ensure('doubletap').then((bin) => {
     helper = spawn(bin);
     helper.stdout.on('data', (d) => d.toString().includes('double') && win.webContents.send('toggle'));
     helper.stderr.on('data', (d) => { console.error(d.toString()); send({ state: 'idle', error: d.toString().trim() }); });
-  };
-  const fresh = fs.existsSync(bin) && fs.statSync(bin).mtimeMs >= fs.statSync(src).mtimeMs;
-  if (fresh) return launch();
-  fs.mkdirSync(path.dirname(bin), { recursive: true });
-  execFile('swiftc', ['-swift-version', '5', '-O', src, '-o', bin], (err) => {
-    if (err) console.error('Double-tap Control disabled (needs Xcode command line tools: xcode-select --install). Option+Space still works.');
-    else launch();
-  });
+  }).catch((e) => console.error(`${e.message} Double-tap Control is off; Option+Space still works.`));
+}
+
+// The Mac's OCR needs a long first start (about a minute, once per restart of the Mac). Do it now, quietly, so it is ready when needed.
+function warmOcr() {
+  ensure('ocr').then((bin) => {
+    const file = path.join(os.tmpdir(), `jarvis-warm-${process.pid}.png`);
+    execFile('screencapture', ['-x', '-R', '0,0,200,60', '-t', 'png', file], (err) => {
+      if (err) return;
+      execFile(bin, [file], () => fs.unlink(file, () => {}));
+    });
+  }).catch(() => {});
 }
 
 const send = (msg) => win && !win.isDestroyed() && win.webContents.send('state', msg);
@@ -101,6 +105,7 @@ if (gotLock) app.whenReady().then(async () => {
     console.error(`Could not register ${DICTATE_HOTKEY}; set JARVIS_DICTATE_HOTKEY to another shortcut.`);
   }
   startDoubleTap();
+  warmOcr();
   speech.warm();
   ipcMain.on('listen-start', () => { speech.stop(); cancel(); }); // talking again also stops any action in progress
   ipcMain.on('audio', (_e, buf, mode) => (mode === 'dictate' ? handleDictation(buf) : handleAudio(buf)));
