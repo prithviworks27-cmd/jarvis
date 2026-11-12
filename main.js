@@ -43,10 +43,11 @@ function warmOcr() {
 }
 
 
-// "Jarvis" wake word: a helper app listens on this Mac only (macOS on-device speech recognition, no network) and reports "wake".
+// Wake word (the assistant's name, Alfred by default): a helper app listens on this Mac only (macOS on-device speech recognition, no network) and reports "wake".
 // It is its own app so macOS asks for microphone/speech access in its name; we talk to it through two pipes.
 let wakeDir, wakeCmd, wakeEvents, wakeOn = true;
 const wakeEnabled = () => process.env.JARVIS_WAKE !== '0';
+const assistantName = () => process.env.JARVIS_NAME || 'Alfred';
 function wakeListening(on) {
   if (!wakeCmd || on === wakeOn) return;
   wakeOn = on;
@@ -69,12 +70,12 @@ function startWake() {
       const lines = pending.split('\n');
       pending = lines.pop();
       for (const line of lines) {
-        if (line === 'wake') win.webContents.send('wake');
+        if (line === 'wake') { if (process.env.JARVIS_WAKE_DEBUG === '1') console.log('wake word detected'); win.webContents.send('wake'); }
         else if (line.startsWith('heard:')) { if (process.env.JARVIS_WAKE_DEBUG === '1') console.log(`wake word heard: ${line.slice(6).trim()}`); }
         else if (line.startsWith('error:')) { console.error(line); send({ state: 'idle', error: `${line.slice(6).trim()} Hotkeys still work.` }); }
       }
     });
-    execFile('open', ['-n', '-g', app, '--stdin', cmd, '--stdout', ev, '--stderr', err]);
+    execFile('open', ['-n', '-g', app, '--stdin', cmd, '--stdout', ev, '--stderr', err, '--args', assistantName().toLowerCase()]);
   }).catch((e) => console.error(`${e.message} The wake word is off; hotkeys still work.`));
 }
 

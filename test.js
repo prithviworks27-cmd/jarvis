@@ -174,5 +174,18 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   assert.strictEqual(run((t) => (t >= 800 ? 0.12 : 0.004), 5)[0], null, 'keeps going while you talk');
   assert.strictEqual(run((t) => (t > 200 && t < 450 ? 0.5 : 0.004), 20)[0], 'none', 'the start cue / a click is not speech');
   assert.strictEqual(run((t) => (t % 400 < 200 ? 0.12 : 0.004), 40)[0], 'stop', 'a long monologue ends at the maximum');
+  // The persona follows the name setting (default Alfred).
+  const prompts = [];
+  global.fetch = async (u, o) => { prompts.push(JSON.parse(o.body).messages[0].content); return { status: 200, ok: true, json: async () => ({ choices: [{ message: { content: 'ok, sir.' } }] }) }; };
+  try {
+    await brain.ask('hello');
+    process.env.JARVIS_NAME = 'Jeeves';
+    await brain.ask('hello again');
+  } finally {
+    global.fetch = realFetch;
+    delete process.env.JARVIS_NAME;
+  }
+  assert.match(prompts[0], /You are Alfred,/);
+  assert.match(prompts[1], /You are Jeeves,/);
   console.log('ok');
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -1,6 +1,6 @@
-# JARVIS
+# Alfred
 
-A voice assistant for your Mac. Press a hotkey, speak, and it answers out loud and can act on your Mac.
+A voice assistant for your Mac (the butler: Alfred, in the spirit of Batman's). The name is a setting: `JARVIS_NAME` in `.env` changes the wake word and how it introduces itself. Press a hotkey, speak, and it answers out loud and can act on your Mac.
 Costs nothing: speech-to-text and the LLM run on Groq's free tier, the voice is Groq's Orpheus model.
 
 ```
@@ -47,11 +47,11 @@ The first time you use each feature macOS asks for permission; click Allow.
 - **Automation** (Calendar, Reminders, Mail) so JARVIS can read them.
 If you clicked Don't Allow, fix it in System Settings > Privacy & Security.
 
-## Hands-free: say "Jarvis"
+## Hands-free: say "Alfred"
 
-Say **"Hey Jarvis"** (or just "Jarvis"), wait for the soft *Tink*, then say what you want. When you stop talking it ends by itself (about 1.3 seconds of quiet) and a *Pop* tells you it got it. If you say nothing for about 7 seconds it gives up quietly. The hotkeys still work, and pressing one again also ends a recording early.
-- **Privacy:** the name is detected by a small helper app (`JARVIS Wake Word`) using macOS's own on-device speech recognition: no network, no key. Nothing is recorded or sent anywhere until it hears the name; then your command is handled like any other. The microphone indicator is on all the time while this is enabled. Turn it off with `JARVIS_WAKE=0` in `.env`.
-- **First run:** macOS asks to let *JARVIS Wake Word* use the Microphone and Speech Recognition. Say Allow to both.
+Say **"Hey Alfred"** (or just "Alfred"), wait for the soft *Tink*, then say what you want. When you stop talking it ends by itself (about 1.3 seconds of quiet) and a *Pop* tells you it got it. If you say nothing for about 7 seconds it gives up quietly. The hotkeys still work, and pressing one again also ends a recording early.
+- **Privacy:** the name is detected by a small helper app (`Alfred Wake Word`) using macOS's own on-device speech recognition: no network, no key. Nothing is recorded or sent anywhere until it hears the name; then your command is handled like any other. The microphone indicator is on all the time while this is enabled. Turn it off with `JARVIS_WAKE=0` in `.env`.
+- **First run:** macOS asks to let *Alfred Wake Word* use the Microphone and Speech Recognition. Say Allow to both.
 - **It does not listen to itself:** the name detector is paused while JARVIS thinks, talks or records, then resumes.
 - **Tips:** pause for a moment after the name before the command. A TV or a conversation nearby can trigger it by mistake (nothing happens unless a command follows). `JARVIS_SOUNDS=0` turns the Tink/Pop off; `JARVIS_WAKE_DEBUG=1` prints what the name detector hears.
 
@@ -112,7 +112,7 @@ Needs the **Accessibility** permission (typing/clicking) and **Automation** for 
 - `brain.js` LLM loop with tool calling and short-term memory
 - `tools.js` the Mac actions (add new ones here)
 - `control.js` acting inside other apps, with the safety rules
-- `helpers/wake.swift` the on-device "Jarvis" detector (built into its own small app by `helpers.js`)
+- `helpers/wake.swift` the on-device wake-word (name) detector (built into its own small app by `helpers.js`)
 - `vad.js` decides when you have finished talking
 - `dictate.js` dictation: paste what you said into the front app
 - `memory.js` the remembered facts and their tools
