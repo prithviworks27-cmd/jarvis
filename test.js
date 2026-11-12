@@ -91,5 +91,27 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   } finally {
     global.fetch = realFetch;
   }
+  // Misheard names snap to real ones; made-up words do not snap to anything.
+  const { closest } = require('./fuzzy');
+  const apps = ['Safari', 'Claude', 'Google Chrome', 'WhatsApp', 'Spotify', 'Notes'];
+  assert.strictEqual(closest('Clawed', apps), 'Claude');
+  assert.strictEqual(closest('cloud', apps), 'Claude');
+  assert.strictEqual(closest('watsapp', apps), 'WhatsApp');
+  assert.strictEqual(closest('banana', apps), null);
+  assert.strictEqual(closest('Risham', ['Rishabh', 'Setting']), 'Rishabh');
+  assert.strictEqual(closest('Settings', ['Rishabh', 'Setting']), 'Setting');
+  // The reply language follows the latest message, not earlier turns (the model sees this bracketed note).
+  const seen = [];
+  global.fetch = async (u, o) => { seen.push(JSON.parse(o.body).messages.at(-1).content); return { status: 200, ok: true, json: async () => ({ choices: [{ message: { content: 'ok, sir.' } }] }) }; };
+  try {
+    await brain.ask('Rishabh ka WhatsApp chat kholo');
+    await brain.ask('What is the weather today?');
+    await brain.ask('आज का मौसम बताओ');
+  } finally {
+    global.fetch = realFetch;
+  }
+  assert.match(seen[0], /Hindi/);
+  assert.match(seen[1], /English/);
+  assert.match(seen[2], /Hindi/);
   console.log('ok');
 })().catch((e) => { console.error(e); process.exit(1); });

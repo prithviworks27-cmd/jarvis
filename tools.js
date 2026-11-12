@@ -2,6 +2,7 @@ const { execFile } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { closest } = require('./fuzzy');
 
 const run = (cmd, args) =>
   new Promise((resolve, reject) =>
@@ -59,12 +60,13 @@ const tools = {
   open_app: {
     def: fn('open_app', 'Open a Mac application by name, e.g. "Spotify".', { name: { type: 'string' } }, ['name']),
     run: async ({ name }) => {
-      // `open -a` needs the exact app name ("Google Chrome"), but people say "Chrome": fall back to the closest installed app.
+      // `open -a` needs the exact app name ("Google Chrome"), but people say "Chrome", and speech recognition says "Clawed" for
+      // "Claude": fall back to a partial match, then to the app that sounds most like it.
       try { await run('open', ['-a', name]); return `Opened ${name}.`; } catch (e) {
         const q = name.toLowerCase().replace(/\.app$/, '');
         const dirs = ['/Applications', '/System/Applications', '/System/Applications/Utilities', '/Applications/Utilities', path.join(os.homedir(), 'Applications')];
         const apps = dirs.flatMap((d) => { try { return fs.readdirSync(d).filter((f) => f.endsWith('.app')).map((f) => f.slice(0, -4)); } catch { return []; } });
-        const match = apps.filter((a) => a.toLowerCase().includes(q)).sort((a, b) => a.length - b.length)[0];
+        const match = apps.filter((a) => a.toLowerCase().includes(q)).sort((a, b) => a.length - b.length)[0] || closest(name, apps);
         if (!match) throw e;
         await run('open', ['-a', match]);
         return `Opened ${match}.`;
