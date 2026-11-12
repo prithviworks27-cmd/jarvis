@@ -38,7 +38,7 @@ async function toggle() {
   }
   window.jarvis.listenStarted();
   const chunks = [];
-  rec = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+  rec = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 96000 }); // more bits than the default: clearer consonants
   rec.ondataavailable = (e) => chunks.push(e.data);
   rec.onstop = async () => {
     stream.getTracks().forEach((t) => t.stop()); // release the mic (and the menu-bar dot)

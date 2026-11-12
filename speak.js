@@ -79,7 +79,7 @@ const run = (cmd, args, input) =>
   });
 
 // Text goes over stdin so a reply starting with "-" is never read as a flag.
-const say = (text) => run('say', ['-v', process.env.JARVIS_VOICE || 'Daniel', '-f', '-'], text);
+const say = (text, voice = process.env.JARVIS_VOICE || 'Daniel') => run('say', ['-v', voice, '-f', '-'], text);
 
 const drop = (p) => p.then((f) => fs.unlink(f, () => {}), () => {}); // delete a file we ended up not playing
 
@@ -118,6 +118,8 @@ async function speak(text) {
   const clean = text.replace(/[*_`#>]/g, '').trim();
   if (!clean) return;
   // Short replies: one request. Long ones: sentence by sentence (split after sentence ends only, so "25.8 degrees" stays whole).
+  // Hindi (Devanagari) replies: Orpheus and Kokoro only speak English, so use the Mac's built-in Hindi voice.
+  if (/[\u0900-\u097F]/.test(clean)) return say(clean, process.env.JARVIS_HINDI_VOICE || 'Lekha');
   const parts = clean.length <= 400 ? [clean] : clean.split(/(?<=[.!?])\s+/);
   const mode = process.env.JARVIS_TTS;
   const chain = mode === 'say' ? [] : mode === 'kokoro' ? [kokoro] : [orpheus, kokoro];

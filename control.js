@@ -7,6 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { closest } = require('./fuzzy');
 
 const LOG = path.join(os.homedir(), 'Library/Logs/jarvis-actions.log');
 const RISKY_WORDS = ['send', 'submit', 'buy', 'pay', 'purchase', 'order', 'delete', 'remove', 'confirm', 'transfer', 'post', 'publish', 'sign out', 'log out'];
@@ -88,6 +89,12 @@ module.exports = ({ run, osa, fn }) => {
     return p;
   };
 
+  // Contact names from the Mac's Contacts app, read once on first use, so a misheard name can snap to a real one.
+  let contacts;
+  const contactNames = () => contacts ||= osa('tell application "Contacts" to set ns to (get name of people)\nset out to ""\nrepeat with n in ns\ntry\nset out to out & (n as text) & linefeed\nend try\nend repeat\nreturn out')
+    .then((t) => t.split('\n').map((x) => x.trim()).filter((x) => x && x !== 'missing value'))
+    .catch(() => { contacts = undefined; return []; }); // no permission yet: try again next time
+
   const frontApp = () => osa('tell application "System Events" to get name of first application process whose frontmost is true');
   const requireAllowed = async () => {
     const app = await frontApp();
@@ -126,7 +133,10 @@ end run`, query);
     },
     whatsapp_open_chat: {
       def: fn('whatsapp_open_chat', 'Open the WhatsApp chat with a person or group by name. Does not type or send anything in the chat.', { name: { type: 'string' } }, ['name']),
-      run: logged('whatsapp_open_chat', async ({ name }) => {
+      run: logged('whatsapp_open_chat', async ({ name: heard }) => {
+        // "Risham" -> "Rishabh": keep the name if it is part of a known one, otherwise take the one that sounds closest.
+        const known = [...(process.env.JARVIS_VOCAB || '').split(',').map((x) => x.trim()).filter(Boolean), ...(await contactNames())];
+        const name = known.some((k) => k.toLowerCase().includes(heard.toLowerCase())) ? heard : closest(heard, known) || heard;
         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         if ((await frontApp()).toLowerCase() !== 'whatsapp') { await osa('tell application "WhatsApp" to activate'); await sleep(300); }
         await requireAllowed();
