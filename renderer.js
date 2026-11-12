@@ -2,11 +2,12 @@ const $ = (id) => document.getElementById(id);
 const buddy = $('buddy');
 const body = $('body');
 const bubble = $('bubble');
-const LABELS = { idle: '', listening: 'Listening…', thinking: 'Thinking…', speaking: '' };
+const LABELS = { idle: '', listening: 'Listening…', dictating: 'Dictating… press again to finish', thinking: 'Thinking…', speaking: '' };
 const SIZE = 76; // keep in sync with --size in style.css
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 let rec = null;
+let recMode = 'ask'; // 'ask' = talk to JARVIS, 'dictate' = type what I say
 let starting = false; // true while waiting for mic permission
 let hideTimer;
 let state = 'idle';
@@ -25,7 +26,7 @@ function show(next, { you, jarvis, error } = {}) {
   }
 }
 
-async function toggle() {
+async function toggle(mode = 'ask') {
   if (rec) return rec.stop();
   if (starting) return; // a second press during the permission wait would orphan a recording and leave the mic on
   starting = true;
@@ -37,21 +38,23 @@ async function toggle() {
     return show('idle', { error: 'Microphone blocked. Allow it in System Settings > Privacy & Security > Microphone.' });
   }
   window.jarvis.listenStarted();
+  recMode = mode;
   const chunks = [];
   rec = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 96000 }); // more bits than the default: clearer consonants
   rec.ondataavailable = (e) => chunks.push(e.data);
   rec.onstop = async () => {
     stream.getTracks().forEach((t) => t.stop()); // release the mic (and the menu-bar dot)
     rec = null;
-    window.jarvis.sendAudio(await new Blob(chunks, { type: 'audio/webm' }).arrayBuffer());
+    window.jarvis.sendAudio(await new Blob(chunks, { type: 'audio/webm' }).arrayBuffer(), recMode);
   };
   rec.start();
   starting = false;
   $('you').textContent = $('jarvis').textContent = '';
-  show('listening');
+  show(recMode === 'dictate' ? 'dictating' : 'listening');
 }
 
 window.jarvis.onToggle(toggle);
+window.jarvis.onDictate(toggle);
 window.jarvis.onState(({ state: s, ...rest }) => show(s, rest));
 // Drag the character to move it.
 let drag = null;
@@ -130,7 +133,7 @@ function frame(now) {
   p.x += p.vx * dt; p.y += p.vy * dt;
 
   // Squash/stretch along the direction of travel, on an underdamped spring so it overshoots and jiggles.
-  const buzz = state === 'listening' ? 0.05 * Math.sin(t * 22) : state === 'speaking' ? 0.03 * Math.sin(t * 14) : 0;
+  const buzz = state === 'listening' || state === 'dictating' ? 0.05 * Math.sin(t * 22) : state === 'speaking' ? 0.03 * Math.sin(t * 14) : 0;
   const target = Math.min(0.2, speed / 1200) + buzz;
   p.sv += (-(p.s - target) * 240 - p.sv * 9) * dt;
   p.s += p.sv * dt;

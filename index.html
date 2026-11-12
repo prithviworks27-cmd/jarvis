@@ -9,25 +9,25 @@
 <body>
   <div id="buddy" data-state="idle">
     <button id="body" aria-label="JARVIS" title="Double-tap Control or press Option+Space to talk. Click to poke, drag to move, right-click to quit.">
-      <svg viewBox="20 15 250 220" aria-hidden="true">
+      <svg viewBox="140 40 260 280" aria-hidden="true">
         <defs>
-          <linearGradient id="g" x1="0.35" y1="0" x2="0.55" y2="1">
-            <stop offset="0" stop-color="#d2f96f"/><stop offset=".22" stop-color="#8fe477"/><stop offset=".6" stop-color="#58c29c"/><stop offset="1" stop-color="#3677ab"/>
+          <linearGradient id="g" x1="0.3" y1="0" x2="0.6" y2="1">
+            <stop offset="0" stop-color="#c8f553"/><stop offset=".35" stop-color="#8ee765"/><stop offset=".72" stop-color="#6fdc67"/><stop offset="1" stop-color="#4fb072"/>
           </linearGradient>
+          <linearGradient id="lip" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4fb274"/><stop offset="1" stop-color="#3f9a78"/></linearGradient>
+          <radialGradient id="halo"><stop offset="0" stop-color="#f4ff6a" stop-opacity=".9"/><stop offset="1" stop-color="#d3f650" stop-opacity="0"/></radialGradient>
+          <radialGradient id="eye" cx="0.45" cy="0.4" r="0.65"><stop offset="0" stop-color="#fff"/><stop offset=".55" stop-color="#fdffd9"/><stop offset="1" stop-color="#eef548"/></radialGradient>
+          <clipPath id="body"><path d="M 232,52 C 252,52 266,78 282,98 C 290,106 298,100 306,96 C 322,92 338,110 356,124 C 384,146 392,186 382,226 C 372,270 330,308 262,310 C 196,312 160,278 156,226 C 152,166 186,128 206,98 C 214,80 220,52 232,52 Z"/></clipPath>
         </defs>
         <g class="jelly">
-          <path d="M 28,160 C 28,102 68,66 110,62 C 116,54 124,42 130,38 C 136,34 142,40 138,48 C 135,55 141,60 150,64 C 194,72 222,112 222,160 C 222,200 184,226 125,226 C 66,226 28,200 28,160 Z" fill="url(#g)"/>
-          <g fill="none" stroke="#fff" stroke-opacity=".35" stroke-width="4" stroke-linecap="round">
-            <path d="M 112,66 C 100,76 92,86 88,98"/><path d="M 122,64 C 116,78 114,88 114,98"/><path d="M 146,66 C 158,74 168,84 172,96"/>
+          <path d="M 232,52 C 252,52 266,78 282,98 C 290,106 298,100 306,96 C 322,92 338,110 356,124 C 384,146 392,186 382,226 C 372,270 330,308 262,310 C 196,312 160,278 156,226 C 152,166 186,128 206,98 C 214,80 220,52 232,52 Z" fill="url(#g)"/>
+          <g clip-path="url(#body)">
+            <circle cx="233" cy="176" r="68" fill="url(#halo)"/><circle cx="338" cy="172" r="58" fill="url(#halo)"/>
+            <path class="mouth" d="M 165,258 C 235,288 322,286 379,256 C 372,282 340,306 262,310 C 205,311 172,290 165,258 Z" fill="url(#lip)"/>
           </g>
         </g>
-        <g class="drops" fill="#6fd24f">
-          <path d="M 207,66 C 198,54 200,42 214,34 C 220,48 222,60 207,66 Z"/>
-          <path d="M 226,92 C 232,84 244,80 254,84 C 250,96 238,102 226,92 Z"/>
-        </g>
-        <g class="eye"><circle cx="113" cy="127" r="27" fill="#fbfce9"/><g class="pupil"><circle cx="118" cy="129" r="11"/><circle cx="114" cy="124" r="3.4" fill="#fff"/></g></g>
-        <g class="eye"><circle cx="172" cy="122" r="27" fill="#fbfce9"/><g class="pupil"><circle cx="177" cy="124" r="11"/><circle cx="173" cy="119" r="3.4" fill="#fff"/></g></g>
-        <path class="mouth" d="M 126,178 L 160,178" stroke="#000" stroke-width="5" stroke-linecap="round" fill="none"/>
+        <g class="eye"><circle cx="233" cy="184" r="46" fill="url(#eye)"/><g class="pupil"><ellipse cx="244" cy="186" rx="12" ry="17"/></g></g>
+        <g class="eye"><circle cx="338" cy="176" r="40" fill="url(#eye)"/><g class="pupil"><ellipse cx="349" cy="178" rx="11" ry="16"/></g></g>
       </svg>
     </button>
     <div id="bubble" hidden>

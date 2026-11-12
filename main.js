@@ -5,10 +5,12 @@ const { execFile, spawn } = require('child_process');
 const { transcribe } = require('./stt');
 const { ask, cancel } = require('./brain');
 const speech = require('./speak');
+const { cleanDictation, pasteText } = require('./dictate');
 
 try { process.loadEnvFile(path.join(__dirname, '.env')); } catch { /* no .env yet; handled in handleAudio */ }
 
 const HOTKEY = process.env.JARVIS_HOTKEY || 'Alt+Space';
+const DICTATE_HOTKEY = process.env.JARVIS_DICTATE_HOTKEY || 'Alt+Shift+Space';
 let win;
 // One transparent, click-through window covers the screen so the character can roam anywhere in it.
 const screenBounds = () => screen.getPrimaryDisplay().workArea;
@@ -59,6 +61,21 @@ async function handleAudio(buf) {
   }
 }
 
+// Dictation: speech to text, pasted into the app in front. The brain and its tools are not involved.
+async function handleDictation(buf) {
+  try {
+    if (!process.env.GROQ_API_KEY) throw new Error('GROQ_API_KEY missing. Copy .env.example to .env and add your key.');
+    if (buf.byteLength < 2000) return send({ state: 'idle' });
+    send({ state: 'thinking' });
+    const text = cleanDictation(await transcribe(Buffer.from(buf)));
+    if (text) await pasteText(text);
+    send({ state: 'idle' });
+  } catch (e) {
+    console.error(e);
+    send({ state: 'idle', error: e.message });
+  }
+}
+
 if (gotLock) app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_wc, perm, cb) => cb(perm === 'media'));
   if (process.platform === 'darwin') await systemPreferences.askForMediaAccess('microphone');
@@ -80,10 +97,13 @@ if (gotLock) app.whenReady().then(async () => {
   if (!globalShortcut.register(HOTKEY, () => win.webContents.send('toggle'))) {
     console.error(`Could not register ${HOTKEY}; double-tap Control still works, or set JARVIS_HOTKEY.`);
   }
+  if (!globalShortcut.register(DICTATE_HOTKEY, () => win.webContents.send('dictate'))) {
+    console.error(`Could not register ${DICTATE_HOTKEY}; set JARVIS_DICTATE_HOTKEY to another shortcut.`);
+  }
   startDoubleTap();
   speech.warm();
   ipcMain.on('listen-start', () => { speech.stop(); cancel(); }); // talking again also stops any action in progress
-  ipcMain.on('audio', (_e, buf) => handleAudio(buf));
+  ipcMain.on('audio', (_e, buf, mode) => (mode === 'dictate' ? handleDictation(buf) : handleAudio(buf)));
   ipcMain.on('interactive', (_e, on) => win.setIgnoreMouseEvents(!on, { forward: true }));
   ipcMain.on('menu', () => Menu.buildFromTemplate([{ label: 'Quit JARVIS', click: () => app.quit() }]).popup({ window: win }));
 });
