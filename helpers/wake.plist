@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleExecutable</key><string>wake</string>
+  <key>CFBundleIdentifier</key><string>local.jarvis.wake</string>
+  <key>CFBundleName</key><string>JARVIS Wake Word</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>LSUIElement</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>JARVIS listens for its name on this Mac only. Nothing is recorded or sent.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>JARVIS uses on-device speech recognition to hear its name.</string>
+</dict></plist>

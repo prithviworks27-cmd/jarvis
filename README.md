@@ -47,6 +47,14 @@ The first time you use each feature macOS asks for permission; click Allow.
 - **Automation** (Calendar, Reminders, Mail) so JARVIS can read them.
 If you clicked Don't Allow, fix it in System Settings > Privacy & Security.
 
+## Hands-free: say "Jarvis"
+
+Say **"Hey Jarvis"** (or just "Jarvis"), wait for the soft *Tink*, then say what you want. When you stop talking it ends by itself (about 1.3 seconds of quiet) and a *Pop* tells you it got it. If you say nothing for about 7 seconds it gives up quietly. The hotkeys still work, and pressing one again also ends a recording early.
+- **Privacy:** the name is detected by a small helper app (`JARVIS Wake Word`) using macOS's own on-device speech recognition: no network, no key. Nothing is recorded or sent anywhere until it hears the name; then your command is handled like any other. The microphone indicator is on all the time while this is enabled. Turn it off with `JARVIS_WAKE=0` in `.env`.
+- **First run:** macOS asks to let *JARVIS Wake Word* use the Microphone and Speech Recognition. Say Allow to both.
+- **It does not listen to itself:** the name detector is paused while JARVIS thinks, talks or records, then resumes.
+- **Tips:** pause for a moment after the name before the command. A TV or a conversation nearby can trigger it by mistake (nothing happens unless a command follows). `JARVIS_SOUNDS=0` turns the Tink/Pop off; `JARVIS_WAKE_DEBUG=1` prints what the name detector hears.
+
 ## Dictation
 
 Press **Option+Shift+Space**, speak, press it again. Your words are typed into whatever app is in front (Notes, Docs, a chat box, any text field). The character glows blue while it listens. No AI is involved after speech recognition, so dictation can never trigger a tool. It pastes the text (so Hindi and any other script work) and puts your clipboard back; it will not paste into a password field, and silence or room noise is not typed. Change the shortcut with `JARVIS_DICTATE_HOTKEY`.
@@ -104,6 +112,8 @@ Needs the **Accessibility** permission (typing/clicking) and **Automation** for 
 - `brain.js` LLM loop with tool calling and short-term memory
 - `tools.js` the Mac actions (add new ones here)
 - `control.js` acting inside other apps, with the safety rules
+- `helpers/wake.swift` the on-device "Jarvis" detector (built into its own small app by `helpers.js`)
+- `vad.js` decides when you have finished talking
 - `dictate.js` dictation: paste what you said into the front app
 - `memory.js` the remembered facts and their tools
 - `speak.js` voices: Orpheus (Groq), offline Kokoro, macOS `say` fallback
