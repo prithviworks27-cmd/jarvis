@@ -75,7 +75,7 @@ Speak any mix. Speech recognition detects the language by itself and writes Hind
 Speech recognition (Whisper) is good but spells unusual names by sound: "Claude" can come out as "Clawed" or "Cloud". JARVIS fixes this after hearing, not before:
 - **Apps:** `open_app` falls back to a partial match, then to the installed app that sounds most like what it heard (consonant skeleton plus edit distance, `fuzzy.js`).
 - **WhatsApp contacts:** the name is snapped to your `JARVIS_VOCAB` list and your Mac's Contacts app (read once, only on your Mac; allow the Contacts prompt). Sync your phone contacts to the Mac (e.g. a Google account in Internet Accounts) for this to cover everyone.
-- **What it heard is always shown** in the bubble, so you can see a mistake straight away.
+- **There is no text on screen:** Alfred only speaks, and the character's look (glow, mouth, eyes) shows what it is doing. Problems are spoken too, in plain words. With `JARVIS_WAKE_DEBUG=1` the log file shows what it heard.
 
 ## Controlling other apps (and the safety rules)
 

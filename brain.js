@@ -50,6 +50,7 @@ async function chat(messages) {
   let res = await request(MODEL, messages);
   // Now and then the model writes a tool call Groq cannot parse (400 tool_use_failed). It is random, so one retry usually works.
   if (res.status === 400 && /tool_use_failed/.test(await res.clone().text())) res = await request(MODEL, messages);
+  if (res.status === 400 && /tool_use_failed/.test(await res.clone().text())) res = await request(FALLBACK_MODEL, messages); // still failing: the other model
   if (res.status === 429) res = await request(FALLBACK_MODEL, messages);
   if (res.status === 429) {
     const wait = Number((await res.text()).match(/try again in ([\d.]+)s/)?.[1]);

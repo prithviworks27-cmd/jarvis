@@ -33,7 +33,10 @@ async function transcribe(buf) {
 function clean({ segments = [], text = '' }) {
   const kept = segments.length ? segments.filter((s) => !(s.no_speech_prob > 0.6 && s.avg_logprob < -1)).map((s) => s.text).join('') : text;
   const t = kept.trim();
-  if (!t || NOISE.test(t) || isEcho(t)) return '';
+  if (!t || NOISE.test(t) || isEcho(t)) {
+    if (process.env.JARVIS_WAKE_DEBUG === '1') console.log(`[stt] dropped: heard ${JSON.stringify(text.trim())}; segments ${JSON.stringify(segments.map((s) => [s.text.trim(), +s.no_speech_prob.toFixed(2), +s.avg_logprob.toFixed(2)]))}`);
+    return '';
+  }
   return t;
 }
 

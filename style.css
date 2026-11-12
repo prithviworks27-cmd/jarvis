@@ -34,15 +34,4 @@ body { font: 13px/1.4 -apple-system, "SF Pro Text", sans-serif; color: #e8f6ff; 
 [data-state="listening"] #body svg { filter: drop-shadow(0 0 5px rgba(255, 90, 90, .95)) drop-shadow(0 0 14px rgba(255, 90, 90, .7)); }
 [data-state="dictating"] #body svg { filter: drop-shadow(0 0 5px rgba(90, 170, 255, .95)) drop-shadow(0 0 14px rgba(90, 170, 255, .7)); }
 [data-state="thinking"] #body svg { filter: drop-shadow(0 0 5px rgba(255, 255, 255, .9)) drop-shadow(0 4px 6px rgba(0, 0, 0, .3)); }
-[data-state="speaking"] @media (prefers-reduced-motion: reduce) { [data-state="speaking"] 
-#bubble {
-  position: absolute; width: 300px; max-height: 220px; overflow-y: auto; padding: 10px 14px; border-radius: 16px;
-  background: rgba(8, 14, 22, 0.92); border: 1px solid rgba(255, 217, 59, 0.45); color: #fff6cc;
-}
-#bubble[hidden] { display: none; }
-#bubble p { margin: 0; }
-#bubble p:empty { display: none; }
-#you { opacity: .6; font-style: italic; margin-bottom: 4px !important; }
-#jarvis { color: #ffe36b; }
-#status { opacity: .7; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
-#status.error { color: #ff8a8a; opacity: 1; text-transform: none; letter-spacing: 0; font-size: 12px; }
+[data-state="speaking"] @media (prefers-reduced-motion: reduce) { [data-state="speaking"]

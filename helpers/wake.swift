@@ -16,7 +16,7 @@ guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-IN")), 
 // The name to listen for is the first argument (default "alfred"). Common mishearings of known names are accepted too.
 let name = (CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "alfred").lowercased()
 let spellings: [String: [String]] = [
-  "alfred": ["alfred", "alfrid", "alfreid", "alfread", "al fred", "alford"],
+  "alfred": ["alfred", "alfrid", "alfreid", "alfread", "alfrad", "al fred", "all fred", "alford", "albert", "elfred"],
   "jarvis": ["jarvis", "jarvas", "jarves", "jarvus", "jarvice", "jar vis", "charvis", "garvis"],
 ]
 let heard = try! NSRegularExpression(pattern: "\\b(" + (spellings[name] ?? [name]).joined(separator: "|") + ")\\b")
@@ -26,6 +26,7 @@ var task: SFSpeechRecognitionTask?
 var active = false
 var lastWake = Date.distantPast
 var lastText = ""
+var lastBuffer = Date()
 let queue = DispatchQueue(label: "wake")
 
 func stopListening() {
@@ -49,9 +50,10 @@ func startListening() {
   req.addsPunctuation = false
   request = req
   let input = engine.inputNode
-  input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { buffer, _ in req.append(buffer) }
+  input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { buffer, _ in lastBuffer = Date(); req.append(buffer) }
   do { try engine.start() } catch { fail("Could not open the microphone: \(error.localizedDescription)", 3) }
   active = true
+  lastBuffer = Date() // the watchdog counts from now, not from before this restart
   task = recognizer.recognitionTask(with: req) { result, error in
     queue.async {
       guard active, request === req else { return }
@@ -69,6 +71,14 @@ func startListening() {
     }
   }
   queue.asyncAfter(deadline: .now() + 45) { if active, request === req { startListening() } }
+}
+
+// If no audio arrives for a while (headphones connected, Mac woke from sleep, the input device changed) start over: otherwise it would stay deaf.
+NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { _ in
+  queue.async { if active { print("note: audio device changed, restarting"); startListening() } }
+}
+Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
+  queue.async { if active, Date().timeIntervalSince(lastBuffer) > 5 { print("note: no audio for 5 s, restarting"); startListening() } }
 }
 
 SFSpeechRecognizer.requestAuthorization { status in
