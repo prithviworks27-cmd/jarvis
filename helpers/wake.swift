@@ -1,4 +1,4 @@
-// Listens for the word "Jarvis" with macOS's own speech recognizer, entirely on this Mac (no network, no key), and prints
+// Listens for the assistant's name with macOS's own speech recognizer, entirely on this Mac (no network, no key), and prints
 // "wake" when it hears it. Commands on stdin: "pause" stops listening (while JARVIS talks or records), "resume" starts again.
 import Speech
 import AVFoundation
@@ -13,7 +13,13 @@ guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-IN")), 
   fail("On-device English speech recognition is not available on this Mac, so the Jarvis wake word is off.", 2)
 }
 
-let heard = try! NSRegularExpression(pattern: "\\b(jarvis|jarvas|jarves|jarvus|jarvice|jar vis|jar viss|charvis|garvis)\\b")
+// The name to listen for is the first argument (default "alfred"). Common mishearings of known names are accepted too.
+let name = (CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "alfred").lowercased()
+let spellings: [String: [String]] = [
+  "alfred": ["alfred", "alfrid", "alfreid", "alfread", "al fred", "alford"],
+  "jarvis": ["jarvis", "jarvas", "jarves", "jarvus", "jarvice", "jar vis", "charvis", "garvis"],
+]
+let heard = try! NSRegularExpression(pattern: "\\b(" + (spellings[name] ?? [name]).joined(separator: "|") + ")\\b")
 let engine = AVAudioEngine()
 var request: SFSpeechAudioBufferRecognitionRequest?
 var task: SFSpeechRecognitionTask?
@@ -38,7 +44,7 @@ func startListening() {
   let req = SFSpeechAudioBufferRecognitionRequest()
   req.requiresOnDeviceRecognition = true
   req.shouldReportPartialResults = true
-  req.contextualStrings = ["Jarvis", "Hey Jarvis"] // tells the recognizer this word is expected: far more reliable, and quicker
+  req.contextualStrings = [name.capitalized, "Hey " + name.capitalized] // tells the recognizer this word is expected: far more reliable, and quicker
   req.taskHint = .unspecified
   req.addsPunctuation = false
   request = req
