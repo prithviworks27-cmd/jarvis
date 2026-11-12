@@ -5,13 +5,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const exec = (cmd, args) => new Promise((resolve, reject) => execFile(cmd, args, (err, out, errout) => (err ? reject(new Error((errout || err.message).trim())) : resolve(out))));
 const osa = (script, ...args) => exec('osascript', ['-e', script, ...args]);
 
-// Whisper "hears" these from silence or room noise; typing them into your document would be wrong.
-const NOISE = /^(thank you\.?|thanks for watching\.?|you\.?|bye\.?|\.+)$/i;
-
-// Trailing space so two dictations in a row do not run together.
+// Trailing space so two dictations in a row do not run together. (Silence and noise are already dropped in stt.js.)
 const cleanDictation = (raw) => {
   const t = String(raw || '').trim();
-  return !t || NOISE.test(t) ? '' : `${t} `;
+  return t ? `${t} ` : '';
 };
 
 // Paste instead of typing key by key: instant (typing 20 characters key by key takes seconds), and it handles Hindi and any other
