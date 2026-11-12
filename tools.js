@@ -196,8 +196,53 @@ end tell`)) || 'No open reminders.',
       return `Reminder added: ${title}.`;
     },
   },
+  gmail_unread: {
+    def: fn('gmail_unread', 'Check the unread emails of Gmail as shown in Google Chrome (the browser Gmail the user sees). Use whenever the user says Gmail, Chrome or the browser. It opens Gmail if needed.'),
+    run: async () => {
+      // One script: find the Gmail tab, make sure it is on the inbox, read its title ("Inbox (3) - you@gmail.com" carries the unread count)
+      // and try to read the unread rows from the page itself (needs Chrome's "Allow JavaScript from Apple Events").
+      const rowsJs = "(() => [...document.querySelectorAll('tr.zE')].slice(0, 8).map((r) => { const s = r.querySelector('.yW span, .zF'); const sub = r.querySelector('.bog'); return (s ? (s.getAttribute('name') || s.textContent) : '?') + ': ' + (sub ? sub.textContent : ''); }).join('\\n'))()";
+      const find = () => osa(`on run argv
+tell application "Google Chrome"
+  repeat with w in windows
+    repeat with t in tabs of w
+      if URL of t contains "mail.google.com" then
+        if URL of t does not contain "#inbox" then
+          set URL of t to "https://mail.google.com/mail/u/0/#inbox"
+          delay 2
+        end if
+        set found to ""
+        try
+          set found to execute t javascript (item 1 of argv)
+        on error
+          set found to "JSERR"
+        end try
+        return (title of t) & linefeed & "###" & linefeed & found
+      end if
+    end repeat
+  end repeat
+end tell
+return "NOTAB"
+end run`, rowsJs);
+      let out = await find();
+      if (out === 'NOTAB') { // not open yet: open it and wait for the page
+        await run('open', ['https://mail.google.com/mail/u/0/#inbox']);
+        for (let i = 0; i < 12 && out === 'NOTAB'; i++) { await new Promise((r) => setTimeout(r, 1000)); out = await find(); }
+        if (out === 'NOTAB') throw new Error('I could not open Gmail in Chrome.');
+      }
+      const [title, , rows = ''] = out.split('\n');
+      const count = Number((title.match(/\((\d+)\)/) || [])[1] || 0);
+      if (count === 0) return 'Gmail shows no unread emails in the inbox.';
+      if (rows && rows !== 'JSERR') return `Gmail has ${count} unread in the inbox:\n${rows}`;
+      // Cannot read the page: look at it instead.
+      await run('osascript', ['-e', 'tell application "Google Chrome" to activate']);
+      await new Promise((r) => setTimeout(r, 800));
+      const seen = await describeScreen(`This is a Gmail inbox. Exactly ${Math.min(count, 5)} emails are unread: their rows are in bold, normally at the top. List only those, as "sender: subject".`);
+      return `Gmail shows ${count} unread in the inbox (the count is exact). The senders and subjects below were read off the screen and may be slightly wrong; to read them exactly, the user can turn on View > Developer > Allow JavaScript from Apple Events in Chrome. On screen: ${seen}`;
+    },
+  },
   unread_mail: {
-    def: fn('unread_mail', 'Count unread emails in Mail and list the 5 most recent senders and subjects.'),
+    def: fn('unread_mail', 'Count unread emails in the macOS Mail app and list the 5 most recent senders and subjects. Only the Mail app: for Gmail in the browser use gmail_unread.'),
     run: async () => osa(`tell application "Mail"
 set out to (unread count of inbox as string) & " unread" & linefeed
 set msgs to (messages of inbox whose read status is false)
