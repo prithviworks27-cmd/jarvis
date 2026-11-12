@@ -14,7 +14,15 @@ const cleanDictation = (raw) => {
   return !t || NOISE.test(t) ? '' : `${t} `;
 };
 
-// Paste instead of typing key by key: instant, and it handles Hindi and any other script. Your clipboard text is put back afterwards.
+// Paste instead of typing key by key: instant (typing 20 characters key by key takes seconds), and it handles Hindi and any other
+// script. Your clipboard text is put back afterwards. Callers check what kind of field has focus first.
+async function paste(text) {
+  const old = await exec('pbpaste', []).catch(() => '');
+  await osa('on run argv\nset the clipboard to (item 1 of argv)\ntell application "System Events" to keystroke "v" using command down\nend run', text);
+  await sleep(250); // let the app read the clipboard before it changes back
+  if (old) await osa('on run argv\nset the clipboard to (item 1 of argv)\nend run', old);
+}
+
 async function pasteText(text) {
   const role = (await osa(`tell application "System Events" to tell (first application process whose frontmost is true)
 try
@@ -24,10 +32,7 @@ on error
 end try
 end tell`)).trim();
   if (role === 'AXSecureTextField') throw new Error('That is a password field, so I will not type into it.');
-  const old = await exec('pbpaste', []).catch(() => '');
-  await osa('on run argv\nset the clipboard to (item 1 of argv)\ntell application "System Events" to keystroke "v" using command down\nend run', text);
-  await sleep(250); // let the app read the clipboard before it changes back
-  if (old) await osa('on run argv\nset the clipboard to (item 1 of argv)\nend run', old);
+  await paste(text);
 }
 
-module.exports = { cleanDictation, pasteText };
+module.exports = { cleanDictation, pasteText, paste };
