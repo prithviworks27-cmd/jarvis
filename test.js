@@ -120,7 +120,6 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   // Dictation text: trailing space, silence hallucinations are dropped.
   const { cleanDictation } = require('./dictate');
   assert.strictEqual(cleanDictation(' Hello world. '), 'Hello world. ');
-  assert.strictEqual(cleanDictation('Thank you.'), '');
   assert.strictEqual(cleanDictation('   '), '');
   assert.strictEqual(cleanDictation('Thank you for the help.'), 'Thank you for the help. ');
   // Memory: remembers, dedupes, refuses secrets, forgets, and picks relevant facts when there are many.
@@ -158,5 +157,11 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
     global.fetch = realFetch2;
     fs.rmSync(process.env.JARVIS_MEMORY_FILE, { force: true });
   }
+  // Whisper's invented text is dropped: silence, its own prompt echoed back, low-confidence no-speech segments.
+  const { clean } = require('./stt');
+  assert.strictEqual(clean({ text: 'Thank you.' }), '');
+  assert.strictEqual(clean({ text: 'Hinglish mixed, in Roman letters.' }), '');
+  assert.strictEqual(clean({ segments: [{ text: ' Open WhatsApp.', no_speech_prob: 0.02, avg_logprob: -0.2 }, { text: ' Rishabh ka chat.', no_speech_prob: 0.9, avg_logprob: -1.5 }] }), 'Open WhatsApp.');
+  assert.strictEqual(clean({ segments: [{ text: ' Thank you for the help.', no_speech_prob: 0.1, avg_logprob: -0.3 }] }), 'Thank you for the help.');
   console.log('ok');
 })().catch((e) => { console.error(e); process.exit(1); });
