@@ -1,9 +1,10 @@
 const { app, BrowserWindow, Menu, globalShortcut, ipcMain, screen, session, systemPreferences } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { execFile, spawn } = require('child_process');
+const net = require('net');
+const { execFile, execFileSync, spawn } = require('child_process');
 const os = require('os');
-const { ensure } = require('./helpers');
+const { ensure, ensureApp } = require('./helpers');
 const { transcribe } = require('./stt');
 const { ask, cancel } = require('./brain');
 const speech = require('./speak');
@@ -41,7 +42,49 @@ function warmOcr() {
   }).catch(() => {});
 }
 
-const send = (msg) => win && !win.isDestroyed() && win.webContents.send('state', msg);
+
+// "Jarvis" wake word: a helper app listens on this Mac only (macOS on-device speech recognition, no network) and reports "wake".
+// It is its own app so macOS asks for microphone/speech access in its name; we talk to it through two pipes.
+let wakeDir, wakeCmd, wakeEvents, wakeOn = true;
+const wakeEnabled = () => process.env.JARVIS_WAKE !== '0';
+function wakeListening(on) {
+  if (!wakeCmd || on === wakeOn) return;
+  wakeOn = on;
+  try { fs.writeSync(wakeCmd, on ? 'resume\n' : 'pause\n'); } catch { /* helper gone */ }
+}
+function startWake() {
+  if (!wakeEnabled()) return;
+  ensureApp('wake', 'JarvisWake').then((app) => {
+    wakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-wake-'));
+    const [cmd, ev, err] = ['cmd', 'ev', 'err'].map((n) => path.join(wakeDir, n));
+    execFileSync('mkfifo', [cmd, ev]);
+    fs.writeFileSync(err, '');
+    // Open both pipes ourselves (read+write) first so neither end can block. When this process dies the helper sees the pipe close and quits.
+    wakeCmd = fs.openSync(cmd, 'r+');
+    let pending = '';
+    // A socket on the pipe is non-blocking; a plain file stream would park a thread in read() and keep JARVIS from quitting.
+    wakeEvents = new net.Socket({ fd: fs.openSync(ev, 'r+'), readable: true, writable: false });
+    wakeEvents.on('data', (d) => {
+      pending += d.toString();
+      const lines = pending.split('\n');
+      pending = lines.pop();
+      for (const line of lines) {
+        if (line === 'wake') win.webContents.send('wake');
+        else if (line.startsWith('heard:')) { if (process.env.JARVIS_WAKE_DEBUG === '1') console.log(`wake word heard: ${line.slice(6).trim()}`); }
+        else if (line.startsWith('error:')) { console.error(line); send({ state: 'idle', error: `${line.slice(6).trim()} Hotkeys still work.` }); }
+      }
+    });
+    execFile('open', ['-n', '-g', app, '--stdin', cmd, '--stdout', ev, '--stderr', err]);
+  }).catch((e) => console.error(`${e.message} The wake word is off; hotkeys still work.`));
+}
+
+// Short sounds say "I am listening" / "got it" when you are not looking at the screen. JARVIS_SOUNDS=0 turns them off.
+const cue = (name) => process.env.JARVIS_SOUNDS !== '0' && execFile('afplay', [`/System/Library/Sounds/${name}.aiff`], () => {});
+
+const send = (msg) => {
+  if (msg.state) wakeListening(msg.state === 'idle'); // not while JARVIS thinks or talks: it must not hear itself
+  return win && !win.isDestroyed() && win.webContents.send('state', msg);
+};
 
 async function handleAudio(buf) {
   try {
@@ -95,6 +138,7 @@ if (gotLock) app.whenReady().then(async () => {
   screen.on('display-metrics-changed', fit);
   win.once('ready-to-show', fit); // macOS can nudge a screen-sized window off its spot; put it back
   win.on('moved', fit);
+  win.webContents.on('did-finish-load', () => win.webContents.send('config', { wake: wakeEnabled() }));
   win.loadFile('index.html');
   app.dock?.hide(); // Siri-style: no Dock icon; right-click the character to quit
 
@@ -105,13 +149,20 @@ if (gotLock) app.whenReady().then(async () => {
     console.error(`Could not register ${DICTATE_HOTKEY}; set JARVIS_DICTATE_HOTKEY to another shortcut.`);
   }
   startDoubleTap();
+  startWake();
   warmOcr();
   speech.warm();
-  ipcMain.on('listen-start', () => { speech.stop(); cancel(); }); // talking again also stops any action in progress
-  ipcMain.on('audio', (_e, buf, mode) => (mode === 'dictate' ? handleDictation(buf) : handleAudio(buf)));
+  ipcMain.on('listen-start', () => { speech.stop(); cancel(); wakeListening(false); cue('Tink'); }); // talking again also stops any action in progress
+  ipcMain.on('listen-end', () => wakeListening(true)); // recording ended with nothing said
+  ipcMain.on('audio', (_e, buf, mode) => { cue('Pop'); return mode === 'dictate' ? handleDictation(buf) : handleAudio(buf); });
   ipcMain.on('interactive', (_e, on) => win.setIgnoreMouseEvents(!on, { forward: true }));
   ipcMain.on('menu', () => Menu.buildFromTemplate([{ label: 'Quit JARVIS', click: () => app.quit() }]).popup({ window: win }));
 });
 
-app.on('will-quit', () => { globalShortcut.unregisterAll(); speech.stop(); speech.shutdown(); helper?.kill(); });
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll(); speech.stop(); speech.shutdown(); helper?.kill();
+  try { fs.writeSync(wakeCmd, 'quit\n'); } catch { /* not running */ }
+  wakeEvents?.destroy();
+  if (wakeDir) fs.rmSync(wakeDir, { recursive: true, force: true });
+});
 app.on('window-all-closed', () => app.quit());

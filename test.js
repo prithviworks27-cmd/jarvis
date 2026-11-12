@@ -163,5 +163,16 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   assert.strictEqual(clean({ text: 'Hinglish mixed, in Roman letters.' }), '');
   assert.strictEqual(clean({ segments: [{ text: ' Open WhatsApp.', no_speech_prob: 0.02, avg_logprob: -0.2 }, { text: ' Rishabh ka chat.', no_speech_prob: 0.9, avg_logprob: -1.5 }] }), 'Open WhatsApp.');
   assert.strictEqual(clean({ segments: [{ text: ' Thank you for the help.', no_speech_prob: 0.1, avg_logprob: -0.3 }] }), 'Thank you for the help.');
+  // End-of-speech detector, fed a level every 50 ms: silence -> 'none', speech then quiet -> 'stop', steady talk keeps going.
+  const { makeVad } = require('./vad');
+  const run = (levelAt, seconds) => { const vad = makeVad(); for (let t = 0; t <= seconds * 1000; t += 50) { const v = vad(levelAt(t), t); if (v) return [v, t]; } return [null, seconds * 1000]; };
+  assert.deepStrictEqual(run(() => 0.004, 20)[0], 'none');
+  const talkThenQuiet = (t) => (t >= 800 && t < 3000 ? 0.12 : 0.004);
+  const [why, at] = run(talkThenQuiet, 20);
+  assert.strictEqual(why, 'stop');
+  assert.ok(at >= 3000 + 1250 && at <= 3000 + 1400, `stops about 1.3 s after the last word (was ${at - 3000} ms)`);
+  assert.strictEqual(run((t) => (t >= 800 ? 0.12 : 0.004), 5)[0], null, 'keeps going while you talk');
+  assert.strictEqual(run((t) => (t > 200 && t < 450 ? 0.5 : 0.004), 20)[0], 'none', 'the start cue / a click is not speech');
+  assert.strictEqual(run((t) => (t % 400 < 200 ? 0.12 : 0.004), 40)[0], 'stop', 'a long monologue ends at the maximum');
   console.log('ok');
 })().catch((e) => { console.error(e); process.exit(1); });

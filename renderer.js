@@ -26,13 +26,41 @@ function show(next, { you, jarvis, error } = {}) {
   }
 }
 
+// With the wake word on, the microphone stays open anyway, so keep our own stream warm: recording then starts instantly.
+let wakeOn = false;
+let warm = null;
+const mic = async () => {
+  if (wakeOn && warm && warm.getAudioTracks().every((t) => t.readyState === 'live')) return warm;
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
+  if (wakeOn) warm = stream;
+  return stream;
+};
+
+// Watches the microphone level and calls done('stop' | 'none') when you have finished talking / said nothing. Returns a cleanup function.
+function watchSilence(stream, done) {
+  const ctx = new AudioContext();
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  ctx.createMediaStreamSource(stream).connect(analyser);
+  const samples = new Float32Array(analyser.fftSize);
+  const vad = makeVad();
+  const t0 = performance.now();
+  const timer = setInterval(() => {
+    analyser.getFloatTimeDomainData(samples);
+    const rms = Math.sqrt(samples.reduce((sum, x) => sum + x * x, 0) / samples.length);
+    const verdict = vad(rms, performance.now() - t0);
+    if (verdict) done(verdict);
+  }, 50);
+  return () => { clearInterval(timer); ctx.close(); };
+}
+
 async function toggle(mode = 'ask') {
   if (rec) return rec.stop();
   if (starting) return; // a second press during the permission wait would orphan a recording and leave the mic on
   starting = true;
   let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream = await mic();
   } catch {
     starting = false;
     return show('idle', { error: 'Microphone blocked. Allow it in System Settings > Privacy & Security > Microphone.' });
@@ -40,11 +68,18 @@ async function toggle(mode = 'ask') {
   window.jarvis.listenStarted();
   recMode = mode;
   const chunks = [];
+  let cancelled = false;
   rec = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 96000 }); // more bits than the default: clearer consonants
   rec.ondataavailable = (e) => chunks.push(e.data);
+  // Talking to JARVIS ends by itself when you stop talking (you can still press the hotkey to end it sooner). Dictation waits for you.
+  const stopWatching = mode === 'ask'
+    ? watchSilence(stream, (why) => { cancelled = why === 'none'; rec?.stop(); })
+    : () => {};
   rec.onstop = async () => {
-    stream.getTracks().forEach((t) => t.stop()); // release the mic (and the menu-bar dot)
+    stopWatching();
+    if (stream !== warm) stream.getTracks().forEach((t) => t.stop()); // release the mic (and the menu-bar dot), unless the wake word keeps it open
     rec = null;
+    if (cancelled) { show('idle'); return window.jarvis.listenEnd(); } // nobody said anything: do nothing
     window.jarvis.sendAudio(await new Blob(chunks, { type: 'audio/webm' }).arrayBuffer(), recMode);
   };
   rec.start();
@@ -55,6 +90,9 @@ async function toggle(mode = 'ask') {
 
 window.jarvis.onToggle(toggle);
 window.jarvis.onDictate(toggle);
+window.jarvis.onConfig((c) => { wakeOn = c.wake; if (wakeOn) mic().catch(() => {}); });
+// Someone said "Jarvis": react and start listening, unless JARVIS is already busy.
+window.jarvis.onWake(() => { if (state === 'idle' && !rec && !starting) { poke(); toggle('ask'); } });
 window.jarvis.onState(({ state: s, ...rest }) => show(s, rest));
 // Drag the character to move it.
 let drag = null;
