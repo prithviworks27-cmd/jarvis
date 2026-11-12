@@ -1,29 +1,22 @@
 const $ = (id) => document.getElementById(id);
 const buddy = $('buddy');
 const body = $('body');
-const bubble = $('bubble');
-const LABELS = { idle: '', listening: 'Listening…', dictating: 'Dictating… press again to finish', thinking: 'Thinking…', speaking: '' };
 const SIZE = 76; // keep in sync with --size in style.css
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 let rec = null;
 let recMode = 'ask'; // 'ask' = talk to JARVIS, 'dictate' = type what I say
 let starting = false; // true while waiting for mic permission
-let hideTimer;
 let state = 'idle';
 
-function show(next, { you, jarvis, error } = {}) {
-  clearTimeout(hideTimer);
+let stuckTimer;
+// There is no text on screen: only the character's look (glow, mouth, eyes) says what it is doing. Everything else is spoken.
+function show(next) {
+  clearTimeout(stuckTimer);
+  // thinking/speaking should end within a minute; if a message was lost, free the page instead of ignoring "Alfred" forever
+  if (next === 'thinking' || next === 'speaking') stuckTimer = setTimeout(() => { window.jarvis.log(`stuck in ${next} for a minute: resetting`); show('idle'); window.jarvis.listenEnd(); }, 60000);
   state = next;
   buddy.dataset.state = next;
-  if (you !== undefined) $('you').textContent = `“${you}”`;
-  if (jarvis !== undefined) $('jarvis').textContent = jarvis;
-  $('status').className = error ? 'error' : '';
-  $('status').textContent = error || LABELS[next];
-  bubble.hidden = next === 'idle' && !error && !$('jarvis').textContent;
-  if (next === 'idle') {
-    hideTimer = setTimeout(() => { bubble.hidden = true; $('you').textContent = $('jarvis').textContent = ''; }, error ? 10000 : 12000);
-  }
 }
 
 // With the wake word on, the microphone stays open anyway, so keep our own stream warm: recording then starts instantly.
@@ -60,10 +53,11 @@ async function toggle(mode = 'ask') {
   starting = true;
   let stream;
   try {
-    stream = await mic();
+    stream = await Promise.race([mic(), new Promise((_, no) => setTimeout(() => no(new Error('microphone did not answer')), 5000))]);
   } catch {
     starting = false;
-    return show('idle', { error: 'Microphone blocked. Allow it in System Settings > Privacy & Security > Microphone.' });
+    window.jarvis.problem('microphone');
+    return show('idle');
   }
   window.jarvis.listenStarted();
   recMode = mode;
@@ -72,19 +66,21 @@ async function toggle(mode = 'ask') {
   rec = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 96000 }); // more bits than the default: clearer consonants
   rec.ondataavailable = (e) => chunks.push(e.data);
   // Talking to JARVIS ends by itself when you stop talking (you can still press the hotkey to end it sooner). Dictation waits for you.
+  const startedAt = performance.now();
+  let endedBy = 'hotkey';
   const stopWatching = mode === 'ask'
-    ? watchSilence(stream, (why) => { cancelled = why === 'none'; rec?.stop(); })
+    ? watchSilence(stream, (why) => { cancelled = why === 'none'; endedBy = why === 'none' ? 'no speech heard' : 'you went quiet'; rec?.stop(); })
     : () => {};
   rec.onstop = async () => {
     stopWatching();
     if (stream !== warm) stream.getTracks().forEach((t) => t.stop()); // release the mic (and the menu-bar dot), unless the wake word keeps it open
     rec = null;
+    window.jarvis.log(`recording ended after ${((performance.now() - startedAt) / 1000).toFixed(1)} s (${endedBy})`);
     if (cancelled) { show('idle'); return window.jarvis.listenEnd(); } // nobody said anything: do nothing
     window.jarvis.sendAudio(await new Blob(chunks, { type: 'audio/webm' }).arrayBuffer(), recMode);
   };
   rec.start();
   starting = false;
-  $('you').textContent = $('jarvis').textContent = '';
   show(recMode === 'dictate' ? 'dictating' : 'listening');
 }
 
@@ -92,8 +88,10 @@ window.jarvis.onToggle(toggle);
 window.jarvis.onDictate(toggle);
 window.jarvis.onConfig((c) => { wakeOn = c.wake; if (wakeOn) mic().catch(() => {}); });
 // Someone said "Jarvis": react and start listening, unless JARVIS is already busy.
-window.jarvis.onWake(() => { if (state === 'idle' && !rec && !starting) { poke(); toggle('ask'); } });
-window.jarvis.onState(({ state: s, ...rest }) => show(s, rest));
+window.jarvis.onWake(() => {
+  if (state === 'idle' && !rec && !starting) { poke(); toggle('ask'); } else window.jarvis.log(`name heard but ignored (state=${state}, recording=${!!rec}, starting=${starting})`);
+});
+window.jarvis.onState(({ state: s }) => show(s));
 // Drag the character to move it.
 let drag = null;
 let justDragged = false;
@@ -138,22 +136,12 @@ const p = { x: spot.x, y: spot.y, vx: 0, vy: 0, tx: spot.x, ty: spot.y, s: 0, sv
 const mouse = { x: -999, y: -999 };
 addEventListener('mousemove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
 
-// Mouse events pass through the transparent window except over the character and its bubble.
+// Mouse events pass through the transparent window except over the character.
 let interactive = false;
 function updateInteractive() {
   const hit = (el) => { const r = el.getBoundingClientRect(); return mouse.x >= r.left - 4 && mouse.x <= r.right + 4 && mouse.y >= r.top - 4 && mouse.y <= r.bottom + 4; };
-  const over = hit(body) || (!bubble.hidden && hit(bubble));
+  const over = hit(body);
   if (over !== interactive) { interactive = over; window.jarvis.interactive(over); }
-}
-
-function placeBubble() {
-  if (bubble.hidden) return;
-  const bw = bubble.offsetWidth, bh = bubble.offsetHeight;
-  const above = p.y - SIZE / 2 - bh - 16 > 0;
-  bubble.style.top = above ? `${-bh - 14}px` : `${SIZE + 14}px`;
-  const centered = (SIZE - bw) / 2;
-  const screenLeft = p.x - SIZE / 2 + centered;
-  bubble.style.left = `${centered + Math.min(Math.max(screenLeft, 8), W - bw - 8) - screenLeft}px`;
 }
 
 let last = performance.now();
@@ -193,7 +181,6 @@ function frame(now) {
   body.style.setProperty('--lx', `${lx}px`);
   body.style.setProperty('--ly', `${ly}px`);
 
-  placeBubble();
   updateInteractive();
   requestAnimationFrame(frame);
 }

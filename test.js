@@ -174,6 +174,12 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   assert.strictEqual(run((t) => (t >= 800 ? 0.12 : 0.004), 5)[0], null, 'keeps going while you talk');
   assert.strictEqual(run((t) => (t > 200 && t < 450 ? 0.5 : 0.004), 20)[0], 'none', 'the start cue / a click is not speech');
   assert.strictEqual(run((t) => (t % 400 < 200 ? 0.12 : 0.004), 40)[0], 'stop', 'a long monologue ends at the maximum');
+  // Quiet voice (0.012) in a silent room is still speech; and a noisy room (chewing at 0.02) must not hold the recording open.
+  assert.strictEqual(run((t) => (t >= 800 && t < 3000 ? 0.012 : 0.001), 20)[0], 'stop', 'a quiet voice is heard');
+  const noisy = run((t) => (t >= 800 && t < 3000 ? 0.12 : 0.02), 20);
+  assert.strictEqual(noisy[0], 'stop');
+  assert.ok(noisy[1] < 6000, `stops soon after the voice ends even with constant background noise (was ${noisy[1]} ms)`);
+  assert.ok(run(() => 0.02, 40)[1] < 15000, 'constant background noise alone ends well before the maximum');
   // The persona follows the name setting (default Alfred).
   const prompts = [];
   global.fetch = async (u, o) => { prompts.push(JSON.parse(o.body).messages[0].content); return { status: 200, ok: true, json: async () => ({ choices: [{ message: { content: 'ok, sir.' } }] }) }; };
