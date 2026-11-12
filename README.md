@@ -47,6 +47,10 @@ The first time you use each feature macOS asks for permission; click Allow.
 - **Automation** (Calendar, Reminders, Mail) so JARVIS can read them.
 If you clicked Don't Allow, fix it in System Settings > Privacy & Security.
 
+## Dictation
+
+Press **Option+Shift+Space**, speak, press it again. Your words are typed into whatever app is in front (Notes, Docs, a chat box, any text field). The character glows blue while it listens. No AI is involved after speech recognition, so dictation can never trigger a tool. It pastes the text (so Hindi and any other script work) and puts your clipboard back; it will not paste into a password field, and silence or room noise is not typed. Change the shortcut with `JARVIS_DICTATE_HOTKEY`.
+
 ## Hindi, English and Hinglish
 
 Speak any mix. Speech recognition detects the language by itself and writes Hindi in Roman letters (Hinglish), so app and contact names still match. If you speak Hindi or Hinglish, JARVIS answers in Hindi, spoken by the Mac's built-in Hindi voice (Lekha); English questions get English answers with the normal voice. Force one language with `JARVIS_STT_LANGUAGE` (e.g. `en`) if auto-detect ever guesses wrong on a short command.
@@ -93,6 +97,7 @@ Needs the **Accessibility** permission (typing/clicking) and **Automation** for 
 - `brain.js` LLM loop with tool calling and short-term memory
 - `tools.js` the Mac actions (add new ones here)
 - `control.js` acting inside other apps, with the safety rules
+- `dictate.js` dictation: paste what you said into the front app
 - `speak.js` voices: Orpheus (Groq), offline Kokoro, macOS `say` fallback
 - `kokoro-worker.mjs` runs the Kokoro model in its own process
 - `index.html`, `renderer.js`, `style.css` the on-screen character

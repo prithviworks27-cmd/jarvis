@@ -10,34 +10,31 @@ body { font: 13px/1.4 -apple-system, "SF Pro Text", sans-serif; color: #e8f6ff; 
 #body svg { display: block; width: 100%; height: auto; overflow: visible; filter: drop-shadow(0 4px 6px rgba(0, 0, 0, .3)); transition: filter .25s; }
 #body:focus-visible { outline: 2px solid #fff; outline-offset: 4px; border-radius: 16px; }
 
-.pupil { fill: #000; transform: translate(calc(var(--lx, 0px) * 3), calc(var(--ly, 0px) * 3)); }
+.pupil { fill: #000; transform: translate(calc(var(--lx, 0px) * 5), calc(var(--ly, 0px) * 5)); }
 .eye { transform-box: fill-box; transform-origin: center; transition: transform .08s; }
 .eye.blink { transform: scaleY(.12); }
 
 /* Jiggly dumpling: the body wobbles in place all the time, faster when it is busy */
 .jelly { transform-box: fill-box; transform-origin: 50% 100%; animation: jiggle 2.2s ease-in-out infinite; }
 @keyframes jiggle { 0%, 100% { transform: scale(1, 1); } 25% { transform: scale(1.04, .96); } 50% { transform: scale(.97, 1.03); } 75% { transform: scale(1.03, .97); } }
-[data-state="listening"] .jelly, [data-state="speaking"] .jelly { animation-duration: .7s; }
+[data-state="listening"] .jelly, [data-state="dictating"] .jelly, [data-state="speaking"] .jelly { animation-duration: .7s; }
 [data-state="thinking"] .jelly { animation-duration: 1.2s; }
 .poked .jelly { animation-duration: .35s; }
 
-/* A plain black line for a mouth: it hums along while speaking, goes 'o' when poked */
-.mouth { transform-box: fill-box; transform-origin: center; transition: transform .12s; }
-[data-state="thinking"] .mouth { transform: translateX(6px) scaleX(.6); }
+/* The darker band at the bottom is the mouth: it opens and closes while speaking, widens when poked */
+.mouth { transform-box: fill-box; transform-origin: 50% 100%; transition: transform .12s; }
+[data-state="thinking"] .mouth { transform: translateX(8px) scaleX(.7); }
 [data-state="speaking"] .mouth { animation: talk .3s ease-in-out infinite; }
-@keyframes talk { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(.8, 3.2); } }
-.poked .mouth { animation: none; transform: scale(.4, 3.4); }
-.poked .eye { transform: scale(1.2); }
+@keyframes talk { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(.95, 1.9); } }
+.poked .mouth { animation: none; transform: scale(.8, 2.2); }
+.poked .eye { transform: scale(1.15); }
 @media (prefers-reduced-motion: reduce) { .jelly, [data-state="speaking"] .mouth { animation: none; } }
 
-/* State cues: glow colour, and the leaf drops flutter while it talks */
+/* State cues: the glow colour says what it is doing */
 [data-state="listening"] #body svg { filter: drop-shadow(0 0 5px rgba(255, 90, 90, .95)) drop-shadow(0 0 14px rgba(255, 90, 90, .7)); }
+[data-state="dictating"] #body svg { filter: drop-shadow(0 0 5px rgba(90, 170, 255, .95)) drop-shadow(0 0 14px rgba(90, 170, 255, .7)); }
 [data-state="thinking"] #body svg { filter: drop-shadow(0 0 5px rgba(255, 255, 255, .9)) drop-shadow(0 4px 6px rgba(0, 0, 0, .3)); }
-.drops { transform-box: fill-box; transform-origin: 20% 80%; }
-[data-state="speaking"] .drops { animation: flutter .3s ease-in-out infinite; }
-@keyframes flutter { 50% { transform: scale(1.25) rotate(8deg); } }
-@media (prefers-reduced-motion: reduce) { [data-state="speaking"] .drops { animation: none; } }
-
+[data-state="speaking"] @media (prefers-reduced-motion: reduce) { [data-state="speaking"] 
 #bubble {
   position: absolute; width: 300px; max-height: 220px; overflow-y: auto; padding: 10px 14px; border-radius: 16px;
   background: rgba(8, 14, 22, 0.92); border: 1px solid rgba(255, 217, 59, 0.45); color: #fff6cc;

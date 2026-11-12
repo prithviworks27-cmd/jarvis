@@ -113,5 +113,11 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   assert.match(seen[0], /Hindi/);
   assert.match(seen[1], /English/);
   assert.match(seen[2], /Hindi/);
+  // Dictation text: trailing space, silence hallucinations are dropped.
+  const { cleanDictation } = require('./dictate');
+  assert.strictEqual(cleanDictation(' Hello world. '), 'Hello world. ');
+  assert.strictEqual(cleanDictation('Thank you.'), '');
+  assert.strictEqual(cleanDictation('   '), '');
+  assert.strictEqual(cleanDictation('Thank you for the help.'), 'Thank you for the help. ');
   console.log('ok');
 })().catch((e) => { console.error(e); process.exit(1); });
