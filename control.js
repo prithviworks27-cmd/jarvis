@@ -96,12 +96,14 @@ const sameText = (a, b) => String(a).replace(/\s+/g, ' ').trim() === String(b).r
 // In a browser the macOS accessibility check cannot see web pages, so ask the page itself. If it cannot answer, do not type.
 const FIELD_JS = "(() => { const e = document.activeElement; return e ? (e.tagName === 'IFRAME' ? 'iframe' : (e.type || e.tagName)) : ''; })()";
 
-// Runs the accessibility helper (helpers/wachat.swift) and returns { code, out }; never throws.
-const realWachat = (args) => ensure('wachat').then((bin) => new Promise((resolve) => {
-  execFile(bin, args, { timeout: 10000 }, (err, out, errout) => resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, out: String(out || errout || '').trim() }));
+// Runs an accessibility helper (helpers/<name>.swift) and returns { code, out }; never throws.
+const realHelper = (name) => (args) => ensure(name).then((bin) => new Promise((resolve) => {
+  execFile(bin, args, { timeout: 15000 }, (err, out, errout) => resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, out: String(out || errout || '').trim() }));
 }), (e) => ({ code: 1, out: e.message }));
+const realWachat = realHelper('wachat');
+const realDiscord = realHelper('discord');
 
-module.exports = ({ run, osa, fn, paste = realPaste, browser, wachat = realWachat }) => {
+module.exports = ({ run, osa, fn, paste = realPaste, browser, wachat = realWachat, discord = realDiscord }) => {
   const br = browser || require('./browsers')({ run, osa });
   let pending = null;
 
@@ -418,7 +420,52 @@ function run(argv) {
   // AX first; the old way only when the helper cannot run at all.
   const viaAX = async (ax, legacy) => { try { return await ax(); } catch (e) { if (!e.ax) throw e; console.error(`[whatsapp] accessibility helper unavailable (${e.message}); using the old way`); return legacy(); } };
 
+  // ---- Discord voice: its mute and deafen switches, found through accessibility. Discord only shows them while its window is
+  // showing, so it is brought forward for a moment and the app you were in is restored afterwards. ----
+  const withDiscord = async (act, { read = true } = {}) => {
+    if (!(await run('pgrep', ['-x', 'Discord']).then(() => true, () => false))) throw new Error('Discord is not running.');
+    const prev = await frontApp().catch(() => '');
+    if (prev.toLowerCase() !== 'discord') await osa('tell application "Discord" to activate');
+    try {
+      if (!read) return await act(); // the action looks for its own control and waits for it
+      let st = { code: 1, out: '' };
+      for (let i = 0; i < 16 && st.code !== 0; i++) { st = await discord(['state']); if (st.code !== 0) await sleep(250); }
+      if (st.code !== 0) throw new Error("I could not reach Discord's voice controls. Is its window open?");
+      return await act(parseState(st.out));
+    } finally {
+      if (prev && prev.toLowerCase() !== 'discord') await osa('on run argv\ntell application (item 1 of argv) to activate\nend run', prev).catch(() => {});
+    }
+  };
+
   const tools = {
+    discord_voice: {
+      def: fn('discord_voice', 'Control Discord voice: mute or unmute the microphone ("mute me"), deafen or undeafen, say the voice state, or leave the call (the user is asked to confirm). It sets the state asked for; it never just toggles. Not the Mac\'s volume: for that use set_mute.',
+        { action: { type: 'string', enum: ['mute', 'unmute', 'deafen', 'undeafen', 'status', 'leave'] } }, ['action']),
+      run: logged('discord_voice', async ({ action }) => {
+        const setSwitch = (which, on, done) => withDiscord(async () => {
+          let r = { code: 2, out: '' };
+          for (let i = 0; i < 4 && r.code === 2; i++) r = await discord(['set', which, on ? 'yes' : 'no']); // 2 = controls not showing yet
+          if (r.code !== 0 || !r.out.includes(`${which}=${on ? 'yes' : 'no'}`)) throw new Error(`I could not ${on ? '' : 'un'}${which} you in Discord.`);
+          return done;
+        }, { read: false });
+        switch (action) {
+          case 'mute': return setSwitch('mute', true, 'Muted your microphone in Discord.');
+          case 'unmute': return setSwitch('mute', false, 'Unmuted your microphone in Discord.');
+          case 'deafen': return setSwitch('deafen', true, 'Deafened in Discord.');
+          case 'undeafen': return setSwitch('deafen', false, 'Undeafened in Discord.');
+          case 'status': return withDiscord(async (st) => `Discord: microphone ${st.muted === 'yes' ? 'muted' : 'live'}, ${st.deafened === 'yes' ? 'deafened' : 'not deafened'}, ${st.incall === 'yes' ? 'in a voice call' : 'not in a voice call'}.`);
+          case 'leave': {
+            if (await withDiscord(async (st) => st.incall !== 'yes')) return 'You are not in a Discord voice call.';
+            return confirm('Leave the Discord voice call.', () => withDiscord(async () => {
+              const r = await discord(['disconnect']);
+              if (r.code !== 0) throw new Error('I could not leave the Discord call.');
+              return 'Left the Discord voice call.';
+            }), frontApp);
+          }
+          default: throw new Error(`Unknown Discord action ${action}.`);
+        }
+      }),
+    },
     switch_tab: {
       def: fn('switch_tab', 'Switch to an open browser tab by what it is about (its title or site), e.g. "DSA unit 1", "YouTube". Looks in the browser the user is working in first (Safari, Chrome, Brave...), then the other open browsers, and brings that browser to the front. Pass browser only if the user named one.',
         { query: { type: 'string' }, browser: { type: 'string', description: 'only if the user named a browser, e.g. "Safari"' } }, ['query']),

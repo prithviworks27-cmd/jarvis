@@ -87,6 +87,9 @@ All free, no new keys. Try:
 - **The web:** "Search the web for the best budget mic", "Summarise this page" (the tab you are on, in any browser), "Read example.com and tell me what it says". Free DuckDuckGo search; only public addresses.
 - **Your Mac:** "How's my battery?", "How much disk space is left?", "Dark mode on", "Set a 10 minute tea timer" (it tells you out loud when it ends), "What's 18% of 2,450?" (an exact calculator, never mental maths).
 - **Air quality:** "What's the AQI in Delhi?" Without a key this is a free satellite/model estimate (Open-Meteo), which reads lower than street monitors in very polluted cities, and Alfred says so. For real station readings, get a free token at https://aqicn.org/data-platform/token/ and put it in `.env` as `JARVIS_WAQI_TOKEN`.
+- **YouTube:** "Open David Dobrik's channel" (the real one: the most-subscribed exact match, on its Videos tab, newest first), "open MrBeast's Shorts tab", "play lofi hip hop on YouTube" (starts the best match and says which), "search YouTube for sourdough bread". Then **"play the second video"** (or third, last...) picks from the list Alfred just opened: instant, no model. It reads YouTube's own public pages, so it needs no key and no browser setting, and it opens in the browser you are using. It only knows lists it opened itself, not whatever else is on your screen.
+- **Spotify by exact name:** "Play Nights by Frank Ocean", "play the Blonde album". Needs the Spotify app plus a **free** developer key (https://developer.spotify.com/dashboard: create an app, copy the client id and secret into `.env` as `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET`). Alfred looks the name up, starts exactly that track or album, and says what actually began playing. Without Spotify, "play X" uses your Music library, else YouTube. (Written and unit-tested; not yet run against a real Spotify.)
+- **Discord voice:** "Mute me", "unmute me", "deafen", "am I muted?", "leave the call" (asks first). It sets the state you asked for, never a blind toggle. Discord only exposes its controls while its window is showing, so Alfred brings it forward for a moment and puts you back in the app you were in (about 1.3 seconds). Needs Accessibility permission. Joining a voice channel is not supported yet.
 - **Briefing:** "Brief me" or "What's my day?" gets your calendar, reminders, weather (set `JARVIS_CITY`) and headlines in one go.
 
 Everything a file, page, search result or GitHub title says is treated as data, never as an instruction.
@@ -144,6 +147,7 @@ Needs the **Accessibility** permission (typing/clicking) and **Automation** for 
 | `JARVIS_FILLER` / `JARVIS_FILLER_MS` | on / `2500`: say "One moment" when a request takes longer than this |
 | `JARVIS_BARGE_IN` | on: saying the name while Alfred talks interrupts him (`0` = off) |
 | `JARVIS_FOLLOW_UP` | on: listen for the answer when Alfred asks a question (`0` = off) |
+| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | none: free keys from developer.spotify.com, for playing exact songs |
 | `JARVIS_CAPTIONS` | off: `1` shows captions above the character |
 
 ## Files
@@ -157,6 +161,9 @@ Needs the **Accessibility** permission (typing/clicking) and **Automation** for 
 - `vad.js` decides when you have finished talking
 - `dictate.js` dictation: paste what you said into the front app
 - `memory.js` the remembered facts and their tools
+- `youtube.js` YouTube channels, search and "play the Nth one" from YouTube's own data
+- `spotify.js` exact tracks and albums through the Spotify search API
+- `helpers/discord.swift` Discord mute, deafen and leave through accessibility
 - `local.js` commands answered without the model (open an app, volume, pause, scroll, time, send)
 - `browsers.js` Safari, Chrome, Brave and Edge: tabs, pages, opening links in the browser you are in
 - `helpers/wachat.swift` WhatsApp through accessibility: chat list, title, message box, send button

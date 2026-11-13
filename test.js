@@ -213,6 +213,133 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   } finally {
     global.fetch = realFetch;
   }
+  // YouTube: the right channel is picked, lists are read from YouTube's own data, and "the second one" uses the list Alfred opened.
+  {
+    const yt = require('./youtube');
+    const chans = [{ id: 'A', title: 'David Dobrik Too', subs: 7.7e6 }, { id: 'B', title: 'David Dobrik', subs: 17.2e6 }, { id: 'C', title: 'VIEWS', subs: 1.5e6 }, { id: 'D', title: 'Sam Sulek', subs: 3.1e6 }, { id: 'E', title: 'Sam Sulek Clips', subs: 2e5 }];
+    assert.strictEqual(yt.pickChannel('david dobrik', chans).id, 'B', 'an exact name beats a longer one with more words');
+    assert.strictEqual(yt.pickChannel('Sam Sulek channel', chans).id, 'D');
+    assert.strictEqual(yt.pickChannel('sulek', chans).id, 'D', 'a partial name picks the biggest match');
+    assert.strictEqual(yt.pickChannel('Mr Beast', chans), null, 'no look-alike: no guess');
+    assert.strictEqual(yt.subscribers('17.2M subscribers'), 17200000);
+    assert.strictEqual(yt.subscribers('@DavidDobrik'), 0);
+    assert.strictEqual(yt.ordinal('second'), 2); assert.strictEqual(yt.ordinal('3rd'), 3); assert.strictEqual(yt.ordinal('last'), -1); assert.strictEqual(yt.ordinal('banana'), null);
+    const page = (obj) => `<html><script>var ytInitialData = ${JSON.stringify(obj)};</script></html>`;
+    const search = { a: { videoRenderer: { videoId: 'vid00000001', title: { runs: [{ text: 'First video' }] }, ownerText: { runs: [{ text: 'Chan' }] } } }, b: [{ videoRenderer: { videoId: 'vid00000002', title: { runs: [{ text: 'Second video' }] } } }, { shortsLockupViewModel: { videoId: 'short000001' } }] };
+    const chanPage = { l: [{ lockupViewModel: { contentType: 'LOCKUP_CONTENT_TYPE_VIDEO', contentId: 'newest00001', metadata: { lockupMetadataViewModel: { title: { content: 'Newest' } } } } }, { lockupViewModel: { contentType: 'LOCKUP_CONTENT_TYPE_SHORTS', contentId: 'shortt00001' } }] };
+    assert.deepStrictEqual(yt.searchVideosIn(yt.pageData(page(search))).map((v) => v.id), ['vid00000001', 'vid00000002'], 'Shorts are not videos');
+    assert.deepStrictEqual(yt.channelVideosIn(yt.pageData(page(chanPage))).map((v) => v.id), ['newest00001']);
+    assert.throws(() => yt.pageData('<html>nothing</html>'), /could not read/);
+    // The tools, with fake pages and a fake browser: nothing real is opened.
+    const opened = [];
+    const fakeFetch = async (url) => ({ ok: true, status: 200, text: async () => page(/results/.test(url) ? (url.includes('sp=') ? { c: { channelRenderer: { channelId: 'UCchannel0001', title: { simpleText: 'David Dobrik' }, subscriberCountText: { simpleText: '@DavidDobrik' }, videoCountText: { simpleText: '17.2M subscribers' } } } } : search) : chanPage) });
+    const ytools = yt({ fn: (name) => ({ function: { name } }), browser: { current: async () => 'Safari', openIn: async (u, b) => opened.push([u, b]) }, fetchImpl: fakeFetch });
+    await assert.rejects(ytools.youtube_play_nth.run({ n: 1 }), /no YouTube list/);
+    assert.strictEqual(await ytools.__youtube_list.run(), 'no');
+    assert.match(await ytools.youtube_channel.run({ name: 'david dobrik' }), /Opened David Dobrik \(@DavidDobrik, 17\.2M subscribers\) on the videos tab in Safari\. Newest video: Newest/);
+    assert.deepStrictEqual(opened[0], ['https://www.youtube.com/channel/UCchannel0001/videos', 'Safari']);
+    assert.strictEqual(await ytools.__youtube_list.run(), 'yes');
+    assert.match(await ytools.youtube_play_nth.run({ n: 1 }), /Playing number 1 from David Dobrik: "Newest"/);
+    assert.strictEqual(opened[1][0], 'https://www.youtube.com/watch?v=newest00001');
+    await assert.rejects(ytools.youtube_play_nth.run({ n: 5 }), /only have 1 videos/);
+    assert.match(await ytools.youtube_play.run({ query: 'lofi' }), /Playing "First video" by Chan in Safari/);
+    assert.strictEqual(opened[2][0], 'https://www.youtube.com/watch?v=vid00000001');
+    assert.match(await ytools.youtube_play_nth.run({ n: -1 }), /"Second video"/, 'last = the last one');
+  }
+  // Spotify by exact name (fake Spotify web API) and play_music's fallback order (fake apps).
+  {
+    const sp = require('./spotify');
+    assert.deepStrictEqual(sp.parseRequest('nights by frank ocean'), { kind: 'track', title: 'nights', artist: 'frank ocean' });
+    assert.deepStrictEqual(sp.parseRequest('the Blonde album on Spotify'), { kind: 'album', title: 'Blonde', artist: '' });
+    assert.deepStrictEqual(sp.parseRequest('play chill vibes playlist'), { kind: 'playlist', title: 'chill vibes', artist: '' });
+    assert.strictEqual(sp.parseRequest('daft punk radio').kind, 'artist');
+    const hits = [];
+    const api = { 'https://accounts.spotify.com/api/token': { access_token: 'tok', expires_in: 3600 } };
+    const fakeSpotify = async (url, o) => {
+      hits.push(url);
+      if (url.includes('/api/token')) return { ok: true, status: 200, json: async () => api[url] };
+      const q = decodeURIComponent(url.match(/q=([^&]+)/)[1]);
+      const track = (name, artist, id) => ({ name, uri: `spotify:track:${id}`, artists: [{ name: artist }] });
+      const items = q.startsWith('track:nights artist:frank ocean') ? [track('Nights', 'Frank Ocean', 'N1')] : q === 'nights' ? [track('Nights Like This', 'Other', 'N2')] : [];
+      return { ok: true, status: 200, json: async () => ({ tracks: { items }, albums: { items: q.includes('Blonde') ? [{ name: 'Blonde', uri: 'spotify:album:B1', artists: [{ name: 'Frank Ocean' }] }] : [] } }) };
+    };
+    const s = sp({ env: { SPOTIFY_CLIENT_ID: 'id', SPOTIFY_CLIENT_SECRET: 'secret' }, fetchImpl: fakeSpotify });
+    assert.strictEqual(sp({ env: {}, fetchImpl: fakeSpotify }).configured(), false);
+    assert.strictEqual((await s.find('nights by frank ocean')).uri, 'spotify:track:N1');
+    assert.strictEqual((await s.find('the Blonde album')).uri, 'spotify:album:B1');
+    assert.strictEqual(await s.find('some song that does not exist by nobody'), null, 'nothing close: no guess');
+    assert.strictEqual(hits.filter((u) => u.includes('/api/token')).length, 1, 'the token is fetched once and reused');
+    // With a named artist, a same-titled song by someone else is not accepted.
+    assert.strictEqual(await s.find('nights like this by frank ocean'), null);
+    // play_music with no Music app and no Spotify installed plays on YouTube, which is free and starts straight away.
+    const asked = [];
+    const mt = require('./extras')({ run: async (cmd) => { if (cmd === 'pgrep') throw new Error('no'); return ''; }, osa: async () => '', fn: (name) => ({ function: { name } }), confirm: async () => '', events: new (require('events'))(), browser: {},
+      getTool: (n) => (n === 'youtube_play' ? { run: async (a) => { asked.push(a.query); return `Playing "${a.query}" on YouTube.`; } } : null), spotify: s });
+    if (!require('fs').existsSync('/Applications/Spotify.app')) assert.match(await mt.play_music.run({ query: 'daft punk' }), /Playing "daft punk" on YouTube/);
+    if (!require('fs').existsSync('/Applications/Spotify.app')) assert.deepStrictEqual(asked, ['daft punk']);
+  }
+  // Discord voice: sets the state asked for (never a blind toggle), brings Discord forward only for the moment and restores the
+  // app you were in, and leaving a call asks first. Fake helper and fake apps: nothing real is touched.
+  {
+    const d = { muted: true, deafened: false, incall: false };
+    const seen = [];
+    const fakeDiscord = async (args) => {
+      if (args[0] === 'state') return { code: 0, out: `muted=${d.muted ? 'yes' : 'no'}\ndeafened=${d.deafened ? 'yes' : 'no'}\nincall=${d.incall ? 'yes' : 'no'}` };
+      if (args[0] === 'set') { const on = args[2] === 'yes'; if (args[1] === 'mute') d.muted = on; else d.deafened = on; return { code: 0, out: `${args[1]}=${on ? 'yes' : 'no'}` }; }
+      if (args[0] === 'disconnect') { if (!d.incall) return { code: 2, out: 'not in a call' }; d.incall = false; return { code: 0, out: 'disconnected' }; }
+      return { code: 1, out: 'bad' };
+    };
+    let running = true;
+    const dOsa = async (script, ...a) => { if (script.includes('frontmost is true')) return 'WhatsApp'; seen.push(a[0] ? `${script.split('\n').find((l) => l.includes('activate')) ? 'activate:' : ''}${a[0]}` : script); return ''; };
+    const dRun = async (cmd, args) => { if (cmd === 'pgrep' && args[1] === 'Discord' && !running) throw new Error('no'); return ''; };
+    const dc = require('./control')({ run: dRun, osa: dOsa, discord: fakeDiscord, fn: (name) => ({ function: { name } }) });
+    assert.strictEqual(await runWith(dc, 'discord_voice', { action: 'unmute' }), 'Unmuted your microphone in Discord.');
+    assert.strictEqual(d.muted, false);
+    assert.strictEqual(await runWith(dc, 'discord_voice', { action: 'unmute' }), 'Unmuted your microphone in Discord.', 'asking twice leaves it as asked');
+    assert.strictEqual(d.muted, false);
+    await runWith(dc, 'discord_voice', { action: 'mute' });
+    assert.strictEqual(d.muted, true);
+    await runWith(dc, 'discord_voice', { action: 'deafen' });
+    assert.strictEqual(d.deafened, true);
+    assert.match(await runWith(dc, 'discord_voice', { action: 'status' }), /microphone muted, deafened, not in a voice call/);
+    assert.ok(seen.some((x) => x.includes('tell application "Discord" to activate')) && seen.includes('activate:WhatsApp'), 'Discord brought forward, then the previous app restored');
+    assert.match(await runWith(dc, 'discord_voice', { action: 'leave' }), /not in a Discord voice call/);
+    d.incall = true;
+    assert.match(await runWith(dc, 'discord_voice', { action: 'leave' }), /CONFIRMATION REQUIRED[\s\S]*Leave the Discord voice call/);
+    assert.strictEqual(d.incall, true, 'nothing happens before the yes');
+    assert.strictEqual(await dc.takePending().run(), 'Left the Discord voice call.');
+    assert.strictEqual(d.incall, false);
+    running = false;
+    assert.match(await runWith(dc, 'discord_voice', { action: 'mute' }), /Discord is not running/);
+    const dctx = { apps: [], discordRunning: async () => true };
+    const L = require('./local');
+    assert.deepStrictEqual(await L.route('mute me', dctx), { tool: 'discord_voice', args: { action: 'mute' } });
+    assert.deepStrictEqual(await L.route('unmute my mic', dctx), { tool: 'discord_voice', args: { action: 'unmute' } });
+    assert.deepStrictEqual(await L.route('deafen', dctx), { tool: 'discord_voice', args: { action: 'deafen' } });
+    assert.deepStrictEqual(await L.route('leave the call', dctx), { tool: 'discord_voice', args: { action: 'leave' } });
+    assert.deepStrictEqual(await L.route('mute', dctx), { tool: 'set_mute', args: { muted: true } }, 'plain "mute" is still the Mac\'s volume');
+    assert.strictEqual(await L.route('mute me', { apps: [], discordRunning: async () => false }), null, 'Discord not running: the model decides');
+  }
+  // A browser argument the user never spoke is dropped before the tool runs (the model fills it in "to be helpful").
+  {
+    const toolsPath3 = require.resolve('./tools');
+    const realTools3 = require.cache[toolsPath3];
+    const got = [];
+    require.cache[toolsPath3] = { id: toolsPath3, filename: toolsPath3, loaded: true, exports: { definitions: [], definitionsFor: () => [], groupsFor: () => new Set(), GROUPS: {}, isReadOnly: () => false, takePending: () => null,
+      runTool: async (n, a) => { if (n === 'youtube_play') got.push(a); return n.startsWith('__') ? 'no' : 'ok'; } } };
+    delete require.cache[require.resolve('./brain')]; delete require.cache[require.resolve('./local')];
+    const b3 = require('./brain');
+    require.cache[toolsPath3] = realTools3;
+    const call = (args) => ({ role: 'assistant', content: null, tool_calls: [{ id: 'y1', function: { name: 'youtube_play', arguments: JSON.stringify(args) } }] });
+    const queue = [call({ query: 'lofi', browser: 'Safari' }), { role: 'assistant', content: 'Done.' }, call({ query: 'lofi', browser: 'Safari' }), { role: 'assistant', content: 'Done.' }];
+    global.fetch = async () => ({ status: 200, ok: true, json: async () => ({ choices: [{ message: queue.shift() }] }) });
+    try {
+      await b3.ask('play lofi on youtube');
+      await b3.ask('play lofi on youtube in Safari');
+    } finally { global.fetch = realFetch; }
+    assert.strictEqual(got[0].browser, undefined, 'a browser nobody named is dropped');
+    assert.strictEqual(got[1].browser, 'Safari', 'a browser the user named is kept');
+  }
   // Fast paths (local.js): whole, unambiguous commands run with no model; anything else still goes to the model.
   {
     const local = require('./local');
@@ -245,6 +372,11 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
     assert.match((await R("what's the date today")).say, /Saturday, 14 November/);
     assert.deepStrictEqual(await R('send it'), { tool: 'whatsapp_send', args: {} });
     assert.strictEqual(await R('send it', { ...ctx, front: async () => 'Safari' }), null, 'only with WhatsApp in front');
+    assert.strictEqual(await R('play the second video'), null, 'no YouTube list from Alfred: the model decides');
+    const yctx = { ...ctx, youtubeList: async () => true };
+    assert.deepStrictEqual(await R('play the second video', yctx), { tool: 'youtube_play_nth', args: { n: 2 } });
+    assert.deepStrictEqual(await R('open the 3rd one', yctx), { tool: 'youtube_play_nth', args: { n: 3 } });
+    assert.deepStrictEqual(await R('click on the last video', yctx), { tool: 'youtube_play_nth', args: { n: -1 } });
     assert.strictEqual(await R('x'.repeat(80)), null);
     assert.strictEqual(await R('tell me about volume'), null);
     // In the brain: a fast-path command makes no model request at all, and a failure is reported, never retried through the model.

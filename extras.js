@@ -75,7 +75,7 @@ function calculate(expression) {
   return Number.isInteger(n) ? String(n) : String(Number(n.toPrecision(10)));
 }
 
-module.exports = ({ run, osa, fn, confirm, events, browser }) => {
+module.exports = ({ run, osa, fn, confirm, events, browser, getTool = () => null, spotify = require('./spotify')() }) => {
   // ---- GitHub, through the user's own `gh` login. Reading is free; changing anything public waits for the user's "yes". ----
   const GH = ['/opt/homebrew/bin/gh', '/usr/local/bin/gh'].find((p) => fs.existsSync(p)) || 'gh'; // autostart has a bare PATH
   const gh = async (...args) => {
@@ -232,7 +232,7 @@ module.exports = ({ run, osa, fn, confirm, events, browser }) => {
     },
     play_music: {
       group: 'media',
-      def: fn('play_music', 'Play a song, artist or album by name: from the Music library if it is there, otherwise opens a Spotify (or YouTube) search for it.', { query: { type: 'string' } }, ['query']),
+      def: fn('play_music', 'Play a song, album or artist by name and start it: in Spotify (exact track or album, with a free developer key), the Music library, or else on YouTube. "Play Nights by Frank Ocean", "play the Blonde album".', { query: { type: 'string' } }, ['query']),
       run: async ({ query }) => {
         const q = String(query || '').trim();
         if (!q) throw new Error('What should I play?');
@@ -249,9 +249,23 @@ end run`, q).catch(() => '');
           if (got) return `Playing ${got} in Music.`;
         }
         if (fs.existsSync('/Applications/Spotify.app')) {
+          if (spotify.configured()) {
+            const hit = await spotify.find(q);
+            if (hit) {
+              if (!(await isRunning('Spotify'))) { await run('open', ['-a', 'Spotify']); for (let i = 0; i < 40 && !(await isRunning('Spotify')); i++) await new Promise((r) => setTimeout(r, 250)); await new Promise((r) => setTimeout(r, 2500)); }
+              await osa('on run argv\ntell application "Spotify" to play track (item 1 of argv)\nend run', hit.uri);
+              await new Promise((r) => setTimeout(r, 1200));
+              // Say what actually started, not what was asked for.
+              const now = await osa('tell application "Spotify" to return (name of current track) & " by " & (artist of current track)').catch(() => '');
+              return now ? `Playing ${now} in Spotify (asked for ${hit.kind} "${hit.name}"${hit.artist ? ` by ${hit.artist}` : ''}).` : `Asked Spotify to play ${hit.kind} "${hit.name}"${hit.artist ? ` by ${hit.artist}` : ''}.`;
+            }
+          }
           await run('open', [`spotify:search:${encodeURIComponent(q)}`]);
-          return `Opened a Spotify search for ${q}; the user picks the song (Spotify does not let me start a search result).`;
+          return `Opened a Spotify search for ${q}; the user picks the song${spotify.configured() ? ' (nothing close enough was found to start by itself)' : ' (add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to .env, free from developer.spotify.com, and Alfred can start the exact song)'}.`;
         }
+        // No Spotify: play it on YouTube (free), which starts straight away.
+        const yt = getTool('youtube_play');
+        if (yt) return yt.run({ query: q });
         await run('open', [`https://music.youtube.com/search?q=${encodeURIComponent(q)}`]);
         return `Opened a YouTube Music search for ${q}.`;
       },
