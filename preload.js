@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('jarvis', {
   listenEnd: () => ipcRenderer.send('listen-end'),
   onDictate: (cb) => ipcRenderer.on('dictate', () => cb('dictate')),
   onState: (cb) => ipcRenderer.on('state', (_e, s) => cb(s)),
+  onCaption: (cb) => ipcRenderer.on('caption', (_e, c) => cb(c)),
   listenStarted: () => ipcRenderer.send('listen-start'),
   sendAudio: (buf, mode) => ipcRenderer.send('audio', buf, mode),
   interactive: (on) => ipcRenderer.send('interactive', on),

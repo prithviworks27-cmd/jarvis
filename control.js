@@ -378,7 +378,7 @@ end run`, label, confirmed ? 'yes' : 'no', RISKY_WORDS.join('|'));
     },
   };
 
-  return { tools, takePending };
+  return { tools, takePending, confirm };
 };
 module.exports.keyScript = keyScript;
 module.exports.pageClickScript = pageClickScript;

@@ -86,12 +86,31 @@ async function toggle(mode = 'ask') {
 
 window.jarvis.onToggle(toggle);
 window.jarvis.onDictate(toggle);
-window.jarvis.onConfig((c) => { wakeOn = c.wake; if (wakeOn) mic().catch(() => {}); });
-// Someone said "Jarvis": react and start listening, unless JARVIS is already busy.
+window.jarvis.onConfig((c) => { wakeOn = c.wake; captionsOn = !!c.captions; if (wakeOn) mic().catch(() => {}); });
+// Someone said the name: react and start listening, unless busy. While speaking it means "stop, listen to me" (barge-in;
+// main only lets the name through while speaking when that is on).
 window.jarvis.onWake(() => {
-  if (state === 'idle' && !rec && !starting) { poke(); toggle('ask'); } else window.jarvis.log(`name heard but ignored (state=${state}, recording=${!!rec}, starting=${starting})`);
+  if ((state === 'idle' || state === 'speaking') && !rec && !starting) { poke(); toggle('ask'); } else window.jarvis.log(`name heard but ignored (state=${state}, recording=${!!rec}, starting=${starting})`);
 });
-window.jarvis.onState(({ state: s }) => show(s));
+window.jarvis.onState(({ state: s, followUp }) => {
+  show(s);
+  // Alfred just asked a question: listen for the answer without needing the name. Saying nothing ends it quietly.
+  if (followUp) setTimeout(() => { if (state === 'idle' && !rec && !starting) { window.jarvis.log('listening for the answer to my question'); toggle('ask'); } }, 250);
+});
+
+// ---- Captions (off unless JARVIS_CAPTIONS=1): a small bubble above the character with what was heard, done and said. ----
+const cap = $('caption');
+let captionsOn = false;
+let capTimer;
+window.jarvis.onCaption((c) => {
+  if (!captionsOn) return;
+  clearTimeout(capTimer);
+  if (c.you) { cap.replaceChildren(); const you = document.createElement('div'); you.className = 'you'; you.textContent = c.you; cap.append(you); }
+  if (c.doing) { cap.querySelector('.doing')?.remove(); const d = document.createElement('div'); d.className = 'doing'; d.textContent = `${c.doing}…`; cap.append(d); }
+  if (c.reply) { cap.querySelector('.doing')?.remove(); const r = document.createElement('div'); r.className = 'reply'; r.textContent = c.reply; cap.append(r); }
+  cap.hidden = false;
+  capTimer = setTimeout(() => { cap.hidden = true; }, c.reply ? 9000 : 30000);
+});
 // Drag the character to move it.
 let drag = null;
 let justDragged = false;
@@ -180,6 +199,13 @@ function frame(now) {
   }
   body.style.setProperty('--lx', `${lx}px`);
   body.style.setProperty('--ly', `${ly}px`);
+
+  if (!cap.hidden) { // keep the caption just above the character, inside the screen
+    const w = cap.offsetWidth, h = cap.offsetHeight;
+    const cx = Math.min(Math.max(p.x - w / 2, 8), W - w - 8);
+    const cy = p.y - SIZE / 2 - h - 12 < 8 ? p.y + SIZE / 2 + 12 : p.y - SIZE / 2 - h - 12;
+    cap.style.transform = `translate(${cx}px, ${cy}px)`;
+  }
 
   updateInteractive();
   requestAnimationFrame(frame);

@@ -7,6 +7,7 @@ const os = require('os');
 const { ensure, ensureApp } = require('./helpers');
 const { transcribe } = require('./stt');
 const { ask, cancel } = require('./brain');
+const { events } = require('./tools');
 const speech = require('./speak');
 const { cleanDictation, pasteText } = require('./dictate');
 
@@ -101,17 +102,35 @@ const spokenError = (message) => {
   if (/rate limit/i.test(message)) return 'I have used up my free allowance for now, sir. Please try again in a minute.';
   if (/GROQ_API_KEY missing/.test(message)) return 'My key is missing, sir. Please check the settings file.';
   if (/password field/.test(message)) return 'That is a password field, sir, so I will not type there.';
+  if (/language model timed out/.test(message)) return 'My thinking is running slow right now, sir. Please try again in a moment.';
   if (/fetch failed|ENOTFOUND|ECONN|network|timed out|aborted/i.test(message)) return 'I cannot reach the internet, sir.';
   return 'Something went wrong, sir.';
 };
 const oops = (e) => { console.error(e); send({ state: 'idle' }); return speech.speak(spokenError(String(e && e.message || e))); };
 
+// Barge-in: while Alfred talks, the name detector keeps listening, so saying his name cuts him off and he listens to you.
+// Not while the reply itself contains the name (he would hear himself). JARVIS_BARGE_IN=0 turns it off.
+const bargeIn = () => process.env.JARVIS_BARGE_IN !== '0';
+let busy = false; // between "started listening" and "idle again"
+let turn = 0; // bumped whenever the user starts talking: an older turn must not touch the screen or the voice any more
+
 const send = (msg) => {
-  if (msg.state) wakeListening(msg.state === 'idle'); // not while JARVIS thinks or talks: it must not hear itself
+  if (msg.state) {
+    busy = msg.state !== 'idle';
+    wakeListening(msg.state === 'idle' || (msg.state === 'speaking' && !!msg.bargeIn)); // not while JARVIS thinks: it must not hear itself
+  }
   return win && !win.isDestroyed() && win.webContents.send('state', msg);
 };
+// Optional captions (JARVIS_CAPTIONS=1): what was heard, what is being done, what was said. Off by default: voice only.
+const captionsOn = () => process.env.JARVIS_CAPTIONS === '1';
+const caption = (c) => captionsOn() && win && !win.isDestroyed() && win.webContents.send('caption', c);
+const TOOL_WORDS = { github_overview: 'Checking GitHub', github_repo_status: 'Checking the repository', github_create_issue: 'Preparing the issue', find_files: 'Looking for files',
+  read_file: 'Reading the file', read_page: 'Reading the page', search_web: 'Searching the web', daily_briefing: 'Preparing your briefing', weather: 'Checking the weather',
+  news: 'Reading the news', wikipedia: 'Looking it up', look_at_screen: 'Looking at your screen', gmail_unread: 'Checking Gmail', calendar_events: 'Checking your calendar' };
 
 async function handleAudio(buf) {
+  const mine = turn;
+  let fillerTimer;
   try {
     if (!process.env.GROQ_API_KEY) throw new Error('GROQ_API_KEY missing. Copy .env.example to .env and add your key.');
     if (buf.byteLength < 2000) return send({ state: 'idle' }); // too short to be speech
@@ -119,17 +138,40 @@ async function handleAudio(buf) {
     const t0 = Date.now();
     const you = (await transcribe(Buffer.from(buf))).trim();
     const t1 = Date.now();
+    if (mine !== turn) return; // the user started talking again
     if (process.env.JARVIS_WAKE_DEBUG === '1') console.log(`${stamp()} [stt] ${(buf.byteLength / 1024).toFixed(0)} KB of audio -> ${JSON.stringify(you)}`);
     if (!you) return send({ state: 'idle' });
-    const jarvis = await ask(you);
+    caption({ you });
+    // Slow request (research, a briefing, WhatsApp): say "One moment" so silence does not feel like a hang. JARVIS_FILLER=0 turns it off.
+    let filling = null;
+    if (process.env.JARVIS_FILLER !== '0') fillerTimer = setTimeout(() => { if (mine === turn) filling = speech.filler(); }, Number(process.env.JARVIS_FILLER_MS) || 2500);
+    const jarvis = await ask(you, { onTool: (name) => mine === turn && TOOL_WORDS[name] && caption({ doing: TOOL_WORDS[name] }) });
+    clearTimeout(fillerTimer);
     console.log(`timing: speech-to-text ${t1 - t0}ms, brain ${Date.now() - t1}ms`);
+    if (mine !== turn) return;
+    await filling; // let "One moment, sir." finish rather than cutting it mid-word
+    if (mine !== turn) return;
     if (!jarvis) return send({ state: 'idle' }); // an action that needs no words
-    send({ state: 'speaking' });
+    caption({ reply: jarvis });
+    send({ state: 'speaking', bargeIn: bargeIn() && !new RegExp(`\\b${assistantName()}\\b`, 'i').test(jarvis) });
     await speech.speak(jarvis);
-    send({ state: 'idle' });
+    if (mine !== turn) return; // cut off by the user: they are already talking
+    // Alfred asked something ("Shall I go ahead?"): listen for the answer straight away, no name or hotkey needed. JARVIS_FOLLOW_UP=0 turns it off.
+    send({ state: 'idle', followUp: process.env.JARVIS_FOLLOW_UP !== '0' && /\?\s*$/.test(jarvis) });
   } catch (e) {
-    await oops(e);
+    clearTimeout(fillerTimer);
+    if (mine === turn) await oops(e);
   }
+}
+
+// Something that happened later (a timer ended): say it as soon as Alfred is free, without interrupting you.
+async function announce(text, tries = 0) {
+  if (busy) { if (tries < 120) setTimeout(() => announce(text, tries + 1), 1000); return; }
+  const mine = turn;
+  caption({ reply: text });
+  send({ state: 'speaking', bargeIn: bargeIn() });
+  await speech.speak(text);
+  if (mine === turn) send({ state: 'idle' });
 }
 
 // Dictation: speech to text, pasted into the app in front. The brain and its tools are not involved.
@@ -161,7 +203,7 @@ if (gotLock) app.whenReady().then(async () => {
   screen.on('display-metrics-changed', fit);
   win.once('ready-to-show', fit); // macOS can nudge a screen-sized window off its spot; put it back
   win.on('moved', fit);
-  win.webContents.on('did-finish-load', () => win.webContents.send('config', { wake: wakeEnabled() }));
+  win.webContents.on('did-finish-load', () => win.webContents.send('config', { wake: wakeEnabled(), captions: captionsOn() }));
   win.loadFile('index.html');
   app.dock?.hide(); // Siri-style: no Dock icon; right-click the character to quit
 
@@ -175,8 +217,10 @@ if (gotLock) app.whenReady().then(async () => {
   startWake();
   warmOcr();
   speech.warm();
-  ipcMain.on('listen-start', () => { speech.stop(); cancel(); wakeListening(false); cue('Tink'); }); // talking again also stops any action in progress
-  ipcMain.on('listen-end', () => wakeListening(true)); // recording ended with nothing said
+  if (process.env.JARVIS_FILLER !== '0') speech.warmFillers();
+  events.on('announce', (text) => announce(text));
+  ipcMain.on('listen-start', () => { turn++; busy = true; speech.stop(); cancel(); wakeListening(false); cue('Tink'); }); // talking again also stops any action in progress
+  ipcMain.on('listen-end', () => { busy = false; wakeListening(true); }); // recording ended with nothing said
   ipcMain.on('problem', (_e, kind) => PROBLEMS[kind] && speech.speak(PROBLEMS[kind]));
   ipcMain.on('log', (_e, msg) => console.log(`${stamp()} [ui] ${String(msg).slice(0, 200)}`)); // the page's own notes for the log
   ipcMain.on('audio', (_e, buf, mode) => { cue('Pop'); return mode === 'dictate' ? handleDictation(buf) : handleAudio(buf); });

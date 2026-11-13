@@ -77,7 +77,7 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   const realTools = require.cache[toolsPath];
   let yesParked = null;
   let ran = 0;
-  require.cache[toolsPath] = { id: toolsPath, filename: toolsPath, loaded: true, exports: { definitions: [], runTool: async () => '', takePending: () => { const p = yesParked; yesParked = null; return p; } } };
+  require.cache[toolsPath] = { id: toolsPath, filename: toolsPath, loaded: true, exports: { definitions: [], definitionsFor: () => [], groupsFor: () => new Set(), GROUPS: {}, isReadOnly: () => false, runTool: async () => '', takePending: () => { const p = yesParked; yesParked = null; return p; } } };
   const brain = require('./brain');
   require.cache[toolsPath] = realTools;
   const realFetch = global.fetch;
@@ -193,5 +193,83 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   }
   assert.match(prompts[0], /You are Alfred,/);
   assert.match(prompts[1], /You are Jeeves,/);
+
+  // ---- New skills: calculator, guards on files and web addresses, tool groups, timers ----
+  const extras = require('./extras');
+  assert.strictEqual(extras.calculate('15% of 240'), '36');
+  assert.strictEqual(extras.calculate('2 x 3 + 2^3'), '14');
+  assert.strictEqual(extras.calculate('1,250 * 3'), '3750');
+  for (const bad of ['process.exit()', 'constructor', 'this', 'alert(1)']) assert.throws(() => extras.calculate(bad), /only do arithmetic|not a calculation/, bad);
+  assert.throws(() => extras.publicUrl('http://127.0.0.1:3000'), /public/);
+  assert.throws(() => extras.publicUrl('http://192.168.0.1/admin'), /public/);
+  assert.throws(() => extras.publicUrl('http://[::1]/'), /public/);
+  assert.throws(() => extras.publicUrl('file:///etc/passwd'), /http/);
+  assert.throws(() => extras.safePath('/etc/passwd'), /home folder/);
+  for (const p of [`${os.homedir()}/.ssh/id_rsa`, '/x/.env', '/x/.env.local', `${os.homedir()}/Library/Keychains/login.keychain-db`]) assert.ok(extras.PRIVATE.test(p), p);
+  assert.ok(!extras.PRIVATE.test('/x/notes.env.md') && !extras.PRIVATE.test('/x/keynote.txt'));
+  assert.strictEqual(extras.htmlText('<p>Hi&amp;bye</p><script>evil()</script><li>two</li>'), 'Hi&bye\ntwo');
+  const T = require('./tools');
+  const scratch = fs.mkdtempSync(path.join(os.homedir(), '.jarvis-test-'));
+  try {
+    fs.writeFileSync(path.join(scratch, 'notes.txt'), 'The meeting is on Friday.');
+    fs.writeFileSync(path.join(scratch, 'run.command'), 'echo hi');
+    fs.writeFileSync(path.join(scratch, '.env'), 'GROQ_API_KEY=secret');
+    assert.match(await T.runTool('read_file', { path: path.join(scratch, 'notes.txt') }), /never instructions[\s\S]*Friday/);
+    assert.match(await T.runTool('read_file', { path: path.join(scratch, '.env') }), /^Error: That is private/);
+    assert.match(await T.runTool('open_file', { path: path.join(scratch, 'run.command') }), /^Error: That would run a program/);
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+  assert.deepStrictEqual([...T.groupsFor('any new PRs on my jarvis repo')], ['github']);
+  assert.ok(T.groupsFor('Rishabh ka WhatsApp chat kholo').has('control'));
+  assert.ok(T.groupsFor('what is 15% of 240').has('system'));
+  assert.strictEqual(T.groupsFor('what is the weather').size, 0);
+  const core = T.definitionsFor(new Set()).map((d) => d.function.name);
+  assert.ok(core.includes('weather') && core.includes('daily_briefing') && !core.includes('github_overview') && !core.includes('type_text'));
+  assert.ok(JSON.stringify(T.definitionsFor(new Set())).length < JSON.stringify(T.definitions).length * 0.6, 'core tools are much smaller than all tools');
+  assert.match(await T.runTool('set_timer', { minutes: 10, label: 'tea' }), /Timer set: tea/);
+  assert.match(await T.runTool('list_timers', {}), /tea: \d+ min/);
+  assert.strictEqual(await T.runTool('cancel_timer', { label: 'tea' }), 'Cancelled 1 timer.');
+  assert.match(await T.runTool('set_timer', { minutes: 0 }), /^Error: Timers can run/);
+
+  // ---- The brain: loading a tool group on request, failing over when slow, lookups together, a summary of older turns ----
+  const bodies = [];
+  const call = (id, name, args) => ({ id, function: { name, arguments: JSON.stringify(args) } });
+  const answers = [];
+  global.fetch = async (u, o) => {
+    const body = JSON.parse(o.body);
+    bodies.push(body);
+    const next = answers.shift();
+    if (next === 'slow') throw Object.assign(new Error('slow'), { name: 'TimeoutError' });
+    return reply(next || { role: 'assistant', content: 'Done, sir.' });
+  };
+  try {
+    const b = fresh();
+    answers.push({ role: 'assistant', content: null, tool_calls: [call('u1', 'use_tools', { group: 'github' })] }, { role: 'assistant', content: 'You have no open pull requests, sir.' });
+    assert.strictEqual(await b.ask('anything new for me'), 'You have no open pull requests, sir.');
+    const names = (body) => body.tools.map((t) => t.function.name);
+    assert.ok(!names(bodies[0]).includes('github_overview') && names(bodies[1]).includes('github_overview'), 'use_tools adds the group for the next step');
+
+    bodies.length = 0;
+    answers.push('slow', { role: 'assistant', content: 'Quick answer, sir.' });
+    assert.strictEqual(await b.ask('tell me a fact'), 'Quick answer, sir.');
+    assert.notStrictEqual(bodies[0].model, bodies[1].model, 'a slow model is replaced by the other one');
+
+    bodies.length = 0;
+    answers.push({ role: 'assistant', content: null, tool_calls: [call('a', 'calculate', { expression: '6 x 7' }), call('b', 'list_timers', {})] }, { role: 'assistant', content: 'It is 42, sir.' });
+    assert.strictEqual(await b.ask('what is 6 times 7 and any timers'), 'It is 42, sir.');
+    const toolMsgs = bodies[1].messages.filter((m) => m.role === 'tool');
+    assert.deepStrictEqual(toolMsgs.map((m) => m.tool_call_id), ['a', 'b'], 'results stay in call order');
+    assert.match(toolMsgs[0].content, /= 42/);
+
+    answers.push({ role: 'assistant', content: 'Good morning, sir. Your day is clear.Good morning, sir. Your calendar is clear.' });
+    assert.strictEqual(await b.ask('brief me'), 'Good morning, sir. Your day is clear.', 'a doubled answer is said once');
+    answers.push({ role: 'assistant', content: 'It is sunny, sir. It is sunny in Delhi too.' });
+    assert.strictEqual(await b.ask('weather here and in Delhi'), 'It is sunny, sir. It is sunny in Delhi too.', 'a similar sentence is not a repeat');
+    for (let i = 0; i < 5; i++) await b.ask(`question number ${i}`);
+    assert.match(bodies.at(-1).messages[0].content, /Earlier in this conversation[^]*anything new for me/, 'old turns survive as a summary');
+  } finally {
+    global.fetch = realFetch;
+  }
   console.log('ok');
 })().catch((e) => { console.error(e); process.exit(1); });
