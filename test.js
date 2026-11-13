@@ -65,64 +65,113 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   await fake.tools.press_keys.run({ keys: 'return' });
   await fake.takePending().run();
   assert.strictEqual(sent.length, 1, 'the key is pressed once, in the right app');
-  // WhatsApp typing replaces the draft (repeating a message once left it in the box twice), adds only with append, then asks
-  // "Shall I send it?"; only the user's yes presses Return, and only with WhatsApp still in front (fake WhatsApp: no real keys).
+  // WhatsApp, driven through a fake accessibility tree: the right chat is pressed by its exact name (never a group that merely
+  // lists the person), typing replaces the draft and is read back, and only the user's yes presses send, and only for the same
+  // chat and the same text. No real WhatsApp, key or click is involved.
   {
-    const keys = [], pasted = [];
-    let app = 'WhatsApp';
-    const waOsa = async (script) => {
-      if (script.includes('frontmost is true')) return app;
-      if (script.includes('position of window 1')) return '0, 0, 1000, 800';
+    const { pickChat } = require('./control');
+    const ppl = [{ name: 'Maa', section: 'Chats' }, { name: 'Mansi', section: 'Chats' }, { name: 'Rishabh', section: 'Chats' }, { name: 'Rishabh Sharma', section: 'Chats' }, { name: 'YT', section: 'Groups in common' }];
+    assert.strictEqual(pickChat(ppl, 'Rishabh').row.name, 'Rishabh', 'an exact name beats a longer partial one');
+    assert.strictEqual(pickChat(ppl, 'Sharma').row.name, 'Rishabh Sharma');
+    assert.deepStrictEqual(pickChat(ppl, 'Ma').ambiguous, ['Maa', 'Mansi'], 'two candidates are asked about, never guessed');
+    assert.strictEqual(pickChat(ppl, 'YT').row.name, 'YT');
+    assert.ok(pickChat(ppl, 'Zed').none);
+    assert.strictEqual(pickChat([{ name: 'Rishabh', section: 'Groups in common' }, { name: 'Rishabh', section: 'Chats' }], 'rishabh').row.section, 'Chats', 'a person before a group of the same name');
+
+    const wa = { title: 'Setting', draft: '', search: '', list: [{ name: 'Setting' }, { name: 'Maa' }], results: [], all: {}, selectAll: false, sent: [], keys: [], pressed: [], garble: false };
+    const fakeWachat = async (args) => {
+      const [cmd, kind, section, name] = args;
+      if (cmd === 'state') return { code: 0, out: `title=${wa.title}\nstatus=\ndraft=${wa.draft}\nsend=${wa.draft ? 'yes' : 'no'}\nsearch=${wa.search}\nsearching=${wa.search || wa.results.length ? 'yes' : 'no'}` };
+      if (cmd === 'rows') return { code: 0, out: [...wa.list.map((r) => `list\t\t${r.name}\tpreview`), ...wa.results.map((r) => `result\t${r.section}\t${r.name}\tpreview`)].join('\n') };
+      if (cmd === 'press') {
+        const pool = kind === 'list' ? wa.list : wa.results;
+        const row = pool.find((r) => r.name === name && (!section || r.section === section));
+        if (!row) return { code: 2, out: 'not found' };
+        wa.pressed.push(`${kind}:${section}:${name}`); wa.title = name; return { code: 0, out: 'pressed' };
+      }
+      if (cmd === 'clear-search') { wa.search = ''; wa.results = []; return { code: 0, out: 'cleared' }; }
+      if (cmd === 'click-composer') return { code: 0, out: 'focused' };
+      if (cmd === 'press-send') { if (!wa.draft) return { code: 2, out: 'no send button' }; wa.sent.push(`${wa.title}: ${wa.draft}`); wa.draft = ''; return { code: 0, out: 'pressed' }; }
+      return { code: 1, out: 'bad' };
+    };
+    const waOsa = async (script, ...args) => {
+      if (script.includes('frontmost is true') && script.includes('count of windows')) return 'WhatsApp|1';
+      if (script.includes('frontmost is true')) return 'WhatsApp';
       if (script.includes('count of windows')) return '1';
-      if (script.includes('System Events')) keys.push(script.replace(/^.*System Events" to /s, '').replace(/\nend run$/, ''));
+      if (script.includes('keystroke (item 1 of argv)')) { wa.search = args[0]; wa.results = wa.all[args[0]] || []; return ''; }
+      if (script.includes('keystroke "a" using')) wa.selectAll = true;
+      if (script.includes('key code 124')) wa.selectAll = false;
+      if (script.includes('key code 36')) wa.keys.push('return');
+      if (script.includes('key code 53')) { wa.search = ''; wa.results = []; } // Escape leaves search mode
       return '';
     };
-    const wa = require('./control')({ run: async () => '', osa: waOsa, paste: async (t) => { pasted.push(t); }, fn: (name) => ({ function: { name } }) });
-    const first = await runWith(wa, 'type_in_whatsapp_chat', { text: 'how are you Rishabh?' });
-    assert.match(first, /replacing any earlier draft[\s\S]*CONFIRMATION REQUIRED[\s\S]*Shall I send it\?/);
-    assert.ok(keys.some((k) => k.includes('keystroke "a" using {command down}')), 'the draft is selected so the paste replaces it');
-    assert.ok(!keys.some((k) => k.includes('key code 36')), 'typing never presses Return');
-    keys.length = 0;
-    await runWith(wa, 'type_in_whatsapp_chat', { text: 'please send me the details.', append: true });
-    assert.ok(keys.some((k) => k.includes('key code 124 using {command down}')) && !keys.some((k) => k.includes('keystroke "a"')), 'append goes to the end, keeps the draft');
-    assert.deepStrictEqual(pasted, ['how are you Rishabh?', ' please send me the details.']);
-    keys.length = 0;
-    app = 'Safari'; // the user moved before saying yes
-    await assert.rejects(wa.takePending().run(), /moved to a different place/);
-    assert.ok(!keys.some((k) => k.includes('key code 36')), 'no Return outside WhatsApp');
-    app = 'WhatsApp';
-    await runWith(wa, 'type_in_whatsapp_chat', { text: 'hi' });
-    assert.strictEqual(await wa.takePending().run(), 'Sent.');
-    assert.strictEqual(keys.filter((k) => k.includes('key code 36')).length, 1, 'yes presses Return once');
+    const waPaste = async (text) => { wa.draft = wa.garble ? 'garbled' : wa.selectAll ? text : wa.draft + text; wa.selectAll = false; };
+    process.env.JARVIS_CONTROL_APPS = 'WhatsApp';
+    const mk = () => require('./control')({ run: async () => '', osa: waOsa, paste: waPaste, wachat: fakeWachat, fn: (name) => ({ function: { name } }) });
+    let c = mk();
+    wa.all.Rishabh = [{ name: 'Rishabh', section: 'Chats' }, { name: 'YT', section: 'Groups in common' }]; // the group lists Rishabh as a member
+
+    // Not in the visible list: found by search, and the person's chat is pressed, not the group.
+    const opened = await runWith(c, 'whatsapp_open_chat', { name: 'Rishabh' });
+    assert.match(opened, /Opened the WhatsApp chat for Rishabh/);
+    assert.deepStrictEqual(wa.pressed, ['result:Chats:Rishabh']);
+    assert.strictEqual(wa.search, '', 'the search box is cleared afterwards');
+    assert.match(await runWith(c, 'whatsapp_open_chat', { name: 'rishabh' }), /already open/);
+
+    // Typing: the text is read back, a repeat replaces it, "append" adds only the new words, then Alfred asks.
+    let r = await runWith(c, 'type_in_whatsapp_chat', { text: 'how are you Rishabh?' });
+    assert.match(r, /Typed in the message box for Rishabh[\s\S]*CONFIRMATION REQUIRED[\s\S]*Shall I send it\?/);
+    assert.strictEqual(wa.draft, 'how are you Rishabh?');
+    r = await runWith(c, 'type_in_whatsapp_chat', { text: 'how are you Rishabh?' });
+    assert.strictEqual(wa.draft, 'how are you Rishabh?', 'repeating a message does not double it');
+    r = await runWith(c, 'type_in_whatsapp_chat', { text: 'please send the details.', append: true });
+    assert.strictEqual(wa.draft, 'how are you Rishabh? please send the details.');
+    r = await runWith(c, 'type_in_whatsapp_chat', { text: 'hello' });
+    assert.match(r, /replaced an earlier draft/, 'a replaced draft is mentioned');
+    assert.strictEqual(wa.sent.length, 0, 'typing never sends');
+
+    // Yes: sends once, with the real send button, and checks the box emptied.
+    assert.strictEqual(await c.takePending().run(), 'Sent to Rishabh.');
+    assert.deepStrictEqual(wa.sent, ['Rishabh: hello']);
+    assert.strictEqual(wa.keys.length, 0, 'the send button was used, not a blind Return');
+
+    // A yes after the chat changed, or the text was edited, sends nothing.
+    await runWith(c, 'type_in_whatsapp_chat', { text: 'one' });
+    wa.title = 'Maa';
+    await assert.rejects(c.takePending().run(), /moved to a different place/);
+    wa.title = 'Rishabh'; wa.draft = 'one';
+    await runWith(c, 'type_in_whatsapp_chat', { text: 'two' });
+    wa.draft = 'two (edited by someone)';
+    await assert.rejects(c.takePending().run(), /changed since I asked/);
+    assert.strictEqual(wa.sent.length, 1, 'nothing more was sent');
+    // A message that did not land correctly is never offered for sending.
+    wa.garble = true;
+    assert.match(await runWith(c, 'type_in_whatsapp_chat', { text: 'three' }), /did not land correctly/);
+    assert.strictEqual(c.takePending(), null, 'no send was offered');
+    wa.garble = false;
+
+    // whatsapp_send: refuses an empty box, otherwise names the chat and the text.
+    wa.draft = '';
+    assert.match(await runWith(c, 'whatsapp_send', {}), /box for Rishabh is empty/);
+    wa.draft = 'see you at 5';
+    assert.match(await runWith(c, 'whatsapp_send', {}), /CONFIRMATION REQUIRED[\s\S]*see you at 5[\s\S]*Rishabh/);
+    assert.strictEqual(await c.takePending().run(), 'Sent to Rishabh.');
+
+    // typing to a person: the chat is opened first, and a chat that will not open means nothing is typed.
+    wa.draft = '';
+    r = await runWith(c, 'whatsapp_type_to', { name: 'Maa', text: 'call me' });
+    assert.match(r, /Opened the WhatsApp chat for Maa[\s\S]*Shall I send it/);
+    assert.strictEqual(wa.draft, 'call me');
+    c.takePending();
+    wa.draft = '';
+    assert.match(await runWith(c, 'whatsapp_type_to', { name: 'Nobody Atall', text: 'hi' }), /no chat with that name came up/);
+    assert.strictEqual(wa.draft, '', 'nothing typed in the wrong place');
+    // Two candidates: ask, do not guess.
+    wa.all.Ma = [{ name: 'Maa', section: 'Chats' }, { name: 'Mansi', section: 'Chats' }];
+    wa.list = [{ name: 'Setting' }];
+    assert.match(await runWith(c, 'whatsapp_open_chat', { name: 'Ma' }), /Several chats match "Ma": Maa, Mansi/);
   }
-  // Browser tabs: any browser, and a misheard word still finds the tab ("DSC Unit 1" was said for the Safari tab "DSA Unit 1").
-  {
-    const { bestTab, canonical } = require('./browsers');
-    const tabs = [{ browser: 'Safari', w: 1, t: 1, title: 'DSA Unit 1 - Arrays and Linked Lists', url: 'https://example.edu/dsa/unit1' },
-      { browser: 'Safari', w: 1, t: 2, title: 'YouTube', url: 'https://www.youtube.com/' }, { browser: 'Safari', w: 1, t: 3, title: 'DSA Unit 2 - Trees', url: 'https://example.edu/dsa/unit2' }];
-    assert.strictEqual(bestTab(tabs, 'DSC Unit 1').t, 1);
-    assert.strictEqual(bestTab(tabs, 'my youtube tab').t, 2);
-    assert.strictEqual(bestTab(tabs, 'unit 2 on safari').t, 3);
-    assert.strictEqual(bestTab(tabs, 'netflix'), null, 'nothing close: no switch');
-    assert.strictEqual(canonical('chrome'), 'Google Chrome');
-    assert.strictEqual(canonical('Brave'), 'Brave Browser');
-    assert.strictEqual(canonical('Safari'), 'Safari');
-    assert.strictEqual(canonical('Notes'), null);
-    // The tab is looked for in the browser the user is in (fake Safari in front, Chrome also open): Safari's tab is shown.
-    const shown = [];
-    const fakeRun = async (cmd, args) => { if (cmd === 'pgrep' && !['Safari', 'Google Chrome'].includes(args[1])) throw new Error('no'); return ''; };
-    const fakeOsa2 = async (script) => {
-      if (script.includes('frontmost is true')) return 'Safari';
-      if (script.includes('repeat with t in tabs of w')) return script.includes('"Safari"') ? '1\t1\tDSA Unit 1 - Arrays\thttps://x.edu/1\n1\t2\tYouTube\thttps://youtube.com/\n' : '1\t1\tDSA Unit 1 notes\thttps://docs.google.com/\n';
-      shown.push(script); return '';
-    };
-    const brw = require('./browsers')({ run: fakeRun, osa: fakeOsa2 });
-    assert.match(await brw.switchTab('DSC unit 1'), /in Safari/);
-    assert.ok(shown.some((s) => s.includes('tell application "Safari"') && s.includes('set current tab of window 1 to tab 1')));
-    assert.strictEqual(await brw.current(), 'Safari');
-    assert.strictEqual(await brw.current('chrome'), 'Google Chrome', 'a browser the user names wins');
-    await assert.rejects(brw.current('Netscape'), /do not know a browser/);
-  }
+  process.env.JARVIS_CONTROL_APPS = 'WhatsApp,Google Chrome'; // as before the WhatsApp block
   // Password-field rule in browsers: fail closed when the page cannot be asked (fake osa, nothing is typed).
   let field = 'text';
   const typed = [];
@@ -157,12 +206,69 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
     assert.strictEqual(await brain.ask('yes'), '');
     assert.strictEqual(ran, 1, 'a yes runs the parked action');
     yesParked = { run: async () => { ran++; return 'Pressed return.'; } };
-    assert.strictEqual(await brain.ask('what time is it'), 'Hello, sir.');
+    assert.strictEqual(await brain.ask('what is your name'), 'Hello, sir.');
     assert.strictEqual(ran, 1, 'anything else drops it without running');
     modelSays = 'Silent Hill was directed by Christophe Gans, sir.SILENT';
     assert.strictEqual(await brain.ask('who directed Silent Hill'), 'Silent Hill was directed by Christophe Gans, sir.');
   } finally {
     global.fetch = realFetch;
+  }
+  // Fast paths (local.js): whole, unambiguous commands run with no model; anything else still goes to the model.
+  {
+    const local = require('./local');
+    const apps = ['Spotify', 'Google Chrome', 'WhatsApp', 'System Settings', 'Notes'];
+    const ctx = { apps, userName: 'sir', now: () => new Date('2026-11-14T15:41:00+05:30'), musicOpen: async () => true, front: async () => 'WhatsApp' };
+    const R = (s, c = ctx) => local.route(s, c);
+    assert.deepStrictEqual(await R('Alfred, please open Spotify.'), { tool: 'open_app', args: { name: 'Spotify' } });
+    assert.deepStrictEqual(await R('open chrome'), { tool: 'open_app', args: { name: 'Google Chrome' } });
+    assert.deepStrictEqual(await R('spotify kholo'), { tool: 'open_app', args: { name: 'Spotify' } });
+    assert.deepStrictEqual(await R('open settings'), { tool: 'open_app', args: { name: 'System Settings' } });
+    assert.strictEqual(await R('open youtube'), null, 'not an installed app: the model decides (site? chat?)');
+    assert.strictEqual(await R('open rishabh'), null);
+    assert.strictEqual(await R('open spotify and play frank ocean'), null, 'a second clause belongs to the model');
+    assert.deepStrictEqual(await R('set the volume to 30%'), { tool: 'set_volume', args: { level: 30 } });
+    assert.deepStrictEqual(await R('volume up'), { tool: 'set_volume', args: { change: 12 } });
+    assert.deepStrictEqual(await R('quieter'), { tool: 'set_volume', args: { change: -12 } });
+    assert.deepStrictEqual(await R('mute'), { tool: 'set_mute', args: { muted: true } });
+    assert.deepStrictEqual(await R('unmute the sound'), { tool: 'set_mute', args: { muted: false } });
+    assert.deepStrictEqual(await R('pause'), { tool: 'media_control', args: { action: 'pause' } });
+    assert.deepStrictEqual(await R('next song'), { tool: 'media_control', args: { action: 'next' } });
+    assert.strictEqual(await R('pause', { ...ctx, musicOpen: async () => false }), null, 'no music app: it may be a video, so the model decides');
+    assert.strictEqual(await R('go back'), null);
+    assert.strictEqual(await R('stop'), null);
+    assert.deepStrictEqual(await R('scroll down'), { tool: 'press_keys', args: { keys: 'pagedown' } });
+    assert.deepStrictEqual(await R('go to the top'), { tool: 'press_keys', args: { keys: 'cmd+up' } });
+    assert.deepStrictEqual(await R('turn on dark mode'), { tool: 'set_dark_mode', args: { on: true } });
+    assert.deepStrictEqual(await R('light mode'), { tool: 'set_dark_mode', args: { on: false } });
+    assert.deepStrictEqual(await R('lock the screen'), { tool: 'lock_screen', args: {} });
+    assert.deepStrictEqual(await R('what time is it'), { say: 'It is 3:41 pm, sir.' });
+    assert.match((await R("what's the date today")).say, /Saturday, 14 November/);
+    assert.deepStrictEqual(await R('send it'), { tool: 'whatsapp_send', args: {} });
+    assert.strictEqual(await R('send it', { ...ctx, front: async () => 'Safari' }), null, 'only with WhatsApp in front');
+    assert.strictEqual(await R('x'.repeat(80)), null);
+    assert.strictEqual(await R('tell me about volume'), null);
+    // In the brain: a fast-path command makes no model request at all, and a failure is reported, never retried through the model.
+    const toolsPath2 = require.resolve('./tools');
+    const realTools2 = require.cache[toolsPath2];
+    const calls = [];
+    let toolResult = 'Opened Spotify.';
+    require.cache[toolsPath2] = { id: toolsPath2, filename: toolsPath2, loaded: true, exports: { definitions: [], definitionsFor: () => [], groupsFor: () => new Set(), GROUPS: {}, isReadOnly: () => false, takePending: () => null,
+      runTool: async (n, a) => { calls.push(n); return n === '__front_app' ? 'Safari' : n === '__music_open' ? 'yes' : toolResult; } } };
+    delete require.cache[require.resolve('./brain')]; delete require.cache[require.resolve('./local')];
+    const quickBrain = require('./brain');
+    require.cache[toolsPath2] = realTools2;
+    const fetches = [];
+    global.fetch = async (...a) => { fetches.push(a); throw new Error('the model must not be called'); };
+    try {
+      assert.strictEqual(await quickBrain.ask('open notes'), '', 'silent on success');
+      assert.ok(calls.includes('open_app') && fetches.length === 0, 'no model request');
+      assert.strictEqual(await quickBrain.ask('what time is it').then((r) => /^It is .* sir\.$/.test(r)), true);
+      toolResult = 'Error: Neither Spotify nor Music is open.';
+      assert.match(await quickBrain.ask('next song'), /^Sorry, sir\. Neither Spotify nor Music is open\.$/);
+      assert.strictEqual(fetches.length, 0, 'a failed quick command is not handed to the model');
+    } finally {
+      global.fetch = realFetch;
+    }
   }
   // Misheard names snap to real ones; made-up words do not snap to anything.
   const { closest } = require('./fuzzy');

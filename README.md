@@ -99,9 +99,18 @@ Everything a file, page, search result or GitHub title says is treated as data, 
 - **"One moment, sir."** When something takes longer than 2.5 seconds, Alfred says so. Each phrase is made once in his normal voice and kept in `~/Library/Application Support/JARVIS/voice-cache`, so it is instant and costs no daily voice quota. `JARVIS_FILLER=0` turns it off.
 - **Interrupt him by name (barge-in):** while Alfred is talking, say "Alfred" and he stops and listens. `JARVIS_BARGE_IN=0` turns it off.
 - **Follow-up listening:** when Alfred asks you something ("Shall I go ahead?"), he listens for your answer straight away, with no name or hotkey. Say nothing and it ends quietly. `JARVIS_FOLLOW_UP=0` turns it off.
+- **Fast commands skip the model:** whole, unambiguous commands run directly on your Mac in tens of milliseconds instead of waiting 1 to 12 seconds on the network: "open Notes" (only an app that is exactly installed), "volume up / down / to 30", "mute", "pause / next song" (only when Spotify or Music is open), "scroll down", "go to the top", "lock the screen", "dark mode on", "what time is it", "what's the date", and "send it" with WhatsApp in front. Anything with an extra clause ("open Spotify and play…") or an unknown name ("open YouTube") still goes to the model. If a fast command fails Alfred says so; it never retries through the model, so nothing runs twice.
 - **Several lookups at once:** independent lookups (a briefing, two searches) run at the same time; anything that acts runs in order.
 - **Longer memory of the conversation:** the last 8 messages go with each request as before, and older turns are kept as a few short lines, so "what did I ask you earlier?" still works.
 - **Captions (optional):** `JARVIS_CAPTIONS=1` shows a small bubble above the character with what it heard, what it is doing ("Checking GitHub…") and what it said. Off by default: Alfred is voice-first.
+
+## WhatsApp, the careful way
+
+Alfred reads WhatsApp through macOS accessibility (the Mac app's own labelled elements), not by guessing from pixels:
+- **The right chat:** it presses the chat whose name is exactly what you said, scrolling it into view first, and searches when it is not on screen. Search results are labelled ("Chats" or "Groups in common"), so a group that merely lists Rishabh can never pass for Rishabh's chat. Two possible matches ("Ma" could be Maa or Mansi) are asked about, never guessed. It confirms by reading the open chat's title.
+- **What goes in the box:** your message replaces any draft (saying it twice does not double it); "also add…" appends only the new words. It reads the box back, and if the text did not land correctly it offers nothing to send.
+- **Sending:** after typing, Alfred asks "Shall I send it?". Only your own "yes" sends, by pressing WhatsApp's real send button, and only if the same chat is still open with the same text in the box. It then checks the box emptied and says who it went to. "Send it" later, with WhatsApp in front, works the same way; an empty box is refused.
+- Needs Accessibility permission for the app that runs Alfred. If the helper cannot run, Alfred falls back to the older screen-reading method.
 
 ## Controlling other apps (and the safety rules)
 
@@ -148,6 +157,9 @@ Needs the **Accessibility** permission (typing/clicking) and **Automation** for 
 - `vad.js` decides when you have finished talking
 - `dictate.js` dictation: paste what you said into the front app
 - `memory.js` the remembered facts and their tools
+- `local.js` commands answered without the model (open an app, volume, pause, scroll, time, send)
+- `browsers.js` Safari, Chrome, Brave and Edge: tabs, pages, opening links in the browser you are in
+- `helpers/wachat.swift` WhatsApp through accessibility: chat list, title, message box, send button
 - `extras.js` GitHub, files, music, system, timers, calculator and web skills, with their safety checks
 - `helpers/pdftext.swift` reads PDF text with macOS PDFKit (built on first use)
 - `speak.js` voices: Orpheus (Groq), offline Kokoro, macOS `say` fallback
