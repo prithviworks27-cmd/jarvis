@@ -75,7 +75,31 @@ Speak any mix. Speech recognition detects the language by itself and writes Hind
 Speech recognition (Whisper) is good but spells unusual names by sound: "Claude" can come out as "Clawed" or "Cloud". JARVIS fixes this after hearing, not before:
 - **Apps:** `open_app` falls back to a partial match, then to the installed app that sounds most like what it heard (consonant skeleton plus edit distance, `fuzzy.js`).
 - **WhatsApp contacts:** the name is snapped to your `JARVIS_VOCAB` list and your Mac's Contacts app (read once, only on your Mac; allow the Contacts prompt). Sync your phone contacts to the Mac (e.g. a Google account in Internet Accounts) for this to cover everyone.
-- **There is no text on screen:** Alfred only speaks, and the character's look (glow, mouth, eyes) shows what it is doing. Problems are spoken too, in plain words. With `JARVIS_WAKE_DEBUG=1` the log file shows what it heard.
+- **No text on screen by default:** Alfred only speaks, and the character's look (glow, mouth, eyes) shows what it is doing (`JARVIS_CAPTIONS=1` adds captions). Problems are spoken too, in plain words. With `JARVIS_WAKE_DEBUG=1` the log file shows what it heard.
+
+## More skills
+
+All free, no new keys. Try:
+- **GitHub** (uses your own `gh` login: `gh auth login` once): "Anything new on GitHub?", "Any open PRs or CI failures on my jarvis repo?", "Open an issue in jarvis called fix the wake word" (asks you to confirm before posting).
+- **Files** (your home folder only): "Find my resume", "Summarise the PDF in Downloads called invoice", "Open my notes folder". PDFs are read with macOS's own PDFKit; Word/RTF with `textutil`. It never reads keys, `.env` files, keychains or browser data, and never opens programs.
+- **Music:** "Pause the music", "Next song", "What's playing?", "Play Coldplay" (your Music library first, else a Spotify or YouTube Music search).
+- **The web:** "Search the web for the best budget mic", "Summarise this page" (the front Chrome tab), "Read example.com and tell me what it says". Free DuckDuckGo search; only public addresses.
+- **Your Mac:** "How's my battery?", "How much disk space is left?", "Dark mode on", "Set a 10 minute tea timer" (it tells you out loud when it ends), "What's 18% of 2,450?" (an exact calculator, never mental maths).
+- **Briefing:** "Brief me" or "What's my day?" gets your calendar, reminders, weather (set `JARVIS_CITY`) and headlines in one go.
+
+Everything a file, page, search result or GitHub title says is treated as data, never as an instruction.
+
+**Staying inside the free tier:** every request resends the tool list, so tools come in groups (control, github, files, media, web, system). Only the groups a request sounds like are sent, and the model can ask for another group with `use_tools` when it needs one. A plain question sends about a third fewer tokens than before, even though there are far more tools.
+
+## Smarter and faster
+
+- **No more long hangs:** if the main model has not answered in 9 seconds (`JARVIS_LLM_TIMEOUT_MS`), the smaller model answers instead. Rate limits and server errors fall back the same way.
+- **"One moment, sir."** When something takes longer than 2.5 seconds, Alfred says so. Each phrase is made once in his normal voice and kept in `~/Library/Application Support/JARVIS/voice-cache`, so it is instant and costs no daily voice quota. `JARVIS_FILLER=0` turns it off.
+- **Interrupt him by name (barge-in):** while Alfred is talking, say "Alfred" and he stops and listens. `JARVIS_BARGE_IN=0` turns it off.
+- **Follow-up listening:** when Alfred asks you something ("Shall I go ahead?"), he listens for your answer straight away, with no name or hotkey. Say nothing and it ends quietly. `JARVIS_FOLLOW_UP=0` turns it off.
+- **Several lookups at once:** independent lookups (a briefing, two searches) run at the same time; anything that acts runs in order.
+- **Longer memory of the conversation:** the last 8 messages go with each request as before, and older turns are kept as a few short lines, so "what did I ask you earlier?" still works.
+- **Captions (optional):** `JARVIS_CAPTIONS=1` shows a small bubble above the character with what it heard, what it is doing ("Checking GitHub…") and what it said. Off by default: Alfred is voice-first.
 
 ## Controlling other apps (and the safety rules)
 
@@ -104,6 +128,12 @@ Needs the **Accessibility** permission (typing/clicking) and **Automation** for 
 | `JARVIS_CITY` | none (used when you just say "the weather") |
 | `JARVIS_HOTKEY` | `Alt+Space` |
 | `JARVIS_MODEL` | `openai/gpt-oss-120b` |
+| `JARVIS_FALLBACK_MODEL` | `openai/gpt-oss-20b` (used when the main one is slow, busy or rate limited) |
+| `JARVIS_LLM_TIMEOUT_MS` | `9000`: how long to wait for the main model before asking the fallback |
+| `JARVIS_FILLER` / `JARVIS_FILLER_MS` | on / `2500`: say "One moment" when a request takes longer than this |
+| `JARVIS_BARGE_IN` | on: saying the name while Alfred talks interrupts him (`0` = off) |
+| `JARVIS_FOLLOW_UP` | on: listen for the answer when Alfred asks a question (`0` = off) |
+| `JARVIS_CAPTIONS` | off: `1` shows captions above the character |
 
 ## Files
 
@@ -116,6 +146,8 @@ Needs the **Accessibility** permission (typing/clicking) and **Automation** for 
 - `vad.js` decides when you have finished talking
 - `dictate.js` dictation: paste what you said into the front app
 - `memory.js` the remembered facts and their tools
+- `extras.js` GitHub, files, music, system, timers, calculator and web skills, with their safety checks
+- `helpers/pdftext.swift` reads PDF text with macOS PDFKit (built on first use)
 - `speak.js` voices: Orpheus (Groq), offline Kokoro, macOS `say` fallback
 - `kokoro-worker.mjs` runs the Kokoro model in its own process
 - `index.html`, `renderer.js`, `style.css` the on-screen character
@@ -128,3 +160,7 @@ Needs the **Accessibility** permission (typing/clicking) and **Automation** for 
 - "Turn the screen off" only locks the Mac if it asks for a password immediately after sleep.
 - Calendar/Mail AppleScript can be slow with big accounts.
 - Toggle (not hold) to talk: Electron global shortcuts can't see key release.
+- Timers live in the running app: quitting Alfred cancels them.
+- Spotify cannot be told to play a search result, so "play X" opens Spotify's search unless the song is in your Music library.
+- The free web search can refuse for a minute if used heavily; Alfred then falls back to news or Wikipedia.
+- Files, pages and GitHub text you ask about are sent to Groq with your question, like everything else you say.

@@ -1,4 +1,5 @@
 const { execFile } = require('child_process');
+const { EventEmitter } = require('events');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -256,8 +257,41 @@ end tell`),
   },
 };
 
+// Timers and other things that happen later reach the voice through these events (main.js listens for 'announce').
+const events = new EventEmitter();
 const control = require('./control')({ run, osa, fn });
-Object.assign(tools, control.tools, require('./memory').tools(fn));
+for (const t of Object.values(control.tools)) t.group = 'control';
+Object.assign(tools, control.tools, require('./memory').tools(fn), require('./extras')({ run, osa, fn, confirm: control.confirm, events }));
+
+// One call for "what's my day": every part is fetched at once, and a part that fails is just left out.
+tools.daily_briefing = {
+  readOnly: true,
+  def: fn('daily_briefing', 'A briefing for the day in one call: today\'s calendar, open reminders, the weather and top headlines. Use for "brief me", "what\'s my day", "good morning".'),
+  run: async () => {
+    const parts = [['Calendar today', () => tools.calendar_events.run({ days: 1 })], ['Reminders', () => tools.list_reminders.run()],
+      ['Weather', () => (process.env.JARVIS_CITY ? tools.weather.run({}) : Promise.reject(new Error('unknown: no home city is set (JARVIS_CITY in .env), so do not mention the weather')))],
+      ['Headlines', async () => (await tools.news.run({})).split('\n').slice(0, 3).join('\n')]];
+    const limit = (p) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error('unavailable: it took too long')), 12000).unref())]);
+    const got = await Promise.allSettled(parts.map(([, f]) => limit(f())));
+    // A missing part is said to be missing: left out, the model tends to invent it (it once made up the weather).
+    return got.map((r, i) => `${parts[i][0]}: ${r.status === 'fulfilled' ? r.value : r.reason.message}`).join('\n\n');
+  },
+};
+for (const name of ['weather', 'news', 'wikipedia', 'look_at_screen', 'get_clipboard', 'calendar_events', 'list_reminders', 'gmail_unread', 'unread_mail', 'list_memories']) tools[name].readOnly = true;
+
+// Tool groups the brain can leave out of a request. Core tools (no group) are always sent. A group is sent when the request
+// (or the one before it, for follow-ups such as "and the second one?") sounds like it, or when the model calls use_tools.
+const GROUPS = {
+  control: /whats ?app|chat|message|\btype\b|\bwrite\b|\btext\b|press|click|\btab\b|chrome|\bkeys?\b|send|reply|button|scroll|bhej|likh|dabao|khol/i,
+  github: /git ?hub|\brepos?\b|repositor|pull request|\bprs?\b|\bissues?\b|commit|\bci\b|\bbuild\b|workflow|pipeline|notification/i,
+  files: /\bfiles?\b|folder|document|\bpdf\b|resume|\bcv\b|\bdocs?\b|download|desktop|finder|spreadsheet|notes? file|\.(txt|md|pdf|docx?)\b/i,
+  media: /music|song|\bplay|pause|resume|\bskip|next track|previous|\btrack|spotify|playing|album|artist|playlist|gaana|gana/i,
+  web: /\bpage\b|article|website|\bsite\b|\blink\b|summar|search|look up|google|price|cost|latest|internet|online|review|how (do|to|can)|\bvs\b|compare/i,
+  system: /battery|charge|disk|storage|space|uptime|dark mode|light mode|timer|alarm|remind me in|minutes?\b|seconds?\b|calculat|percent|\bplus\b|\bminus\b|\btimes\b|divided|\d\s*[-+*/x%^]\s*\d|\d\s*%|how much is|square root|memory|ram\b/i,
+};
+const groupsFor = (text) => new Set(Object.keys(GROUPS).filter((g) => GROUPS[g].test(text)));
+const definitionsFor = (groups) => Object.values(tools).filter((t) => !t.group || groups.has(t.group)).map((t) => t.def);
+const isReadOnly = (name) => !!tools[name]?.readOnly;
 
 const definitions = Object.values(tools).map((t) => t.def);
 
@@ -271,4 +305,4 @@ async function runTool(name, args) {
   }
 }
 
-module.exports = { definitions, runTool, takePending: control.takePending };
+module.exports = { definitions, definitionsFor, groupsFor, GROUPS, isReadOnly, runTool, takePending: control.takePending, events };

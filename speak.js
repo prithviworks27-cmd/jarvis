@@ -132,4 +132,40 @@ async function speak(text) {
   if (mine === gen) await say(parts.slice(done).join(''));
 }
 
-module.exports = { speak, stop, warm, shutdown };
+// ---- Fillers: "One moment, sir." while a slow request is still working. Each phrase is made once with the normal voice and
+// kept on disk, so a filler is instant and costs no daily voice quota after the first time.
+const CACHE = path.join(os.homedir(), 'Library/Application Support/JARVIS/voice-cache');
+const fillers = () => { const who = process.env.JARVIS_USER_NAME || 'sir'; return [`One moment, ${who}.`, `Just a moment, ${who}.`, `Working on it, ${who}.`]; };
+const making = new Map();
+
+function clip(text) {
+  const mode = process.env.JARVIS_TTS;
+  const voice = mode === 'say' ? `say:${process.env.JARVIS_VOICE || 'Daniel'}` : mode === 'kokoro' ? `kokoro:${process.env.JARVIS_KOKORO_VOICE || 'bm_george'}` : `orpheus:${process.env.JARVIS_TTS_VOICE || 'troy'}`;
+  const file = path.join(CACHE, crypto.createHash('sha1').update(`${voice}|${text}`).digest('hex').slice(0, 16));
+  for (const ext of ['.wav', '.aiff']) if (fs.existsSync(file + ext)) return Promise.resolve(file + ext);
+  if (!making.has(file)) {
+    making.set(file, (async () => {
+      fs.mkdirSync(CACHE, { recursive: true });
+      const chain = mode === 'say' ? [] : mode === 'kokoro' ? [kokoro] : [orpheus, kokoro];
+      for (const synth of chain) {
+        try { const tmp = await synth(text); fs.copyFileSync(tmp, file + '.wav'); fs.unlink(tmp, () => {}); return file + '.wav'; } catch { /* next engine */ }
+      }
+      await new Promise((resolve, reject) => spawn('say', ['-v', process.env.JARVIS_VOICE || 'Daniel', '-o', file + '.aiff', text]).on('close', (c) => (c ? reject(new Error('say failed')) : resolve())).on('error', reject));
+      return file + '.aiff';
+    })().finally(() => making.delete(file)));
+  }
+  return making.get(file);
+}
+
+// Plays a filler unless something else started speaking meanwhile. Resolves when it has finished (or was cut off).
+async function filler() {
+  const mine = gen;
+  const list = fillers();
+  const file = await clip(list[Math.floor(Math.random() * list.length)]).catch(() => null);
+  if (!file || mine !== gen) return;
+  await run('afplay', [file]);
+}
+// Makes the filler clips in the background a little after start-up (three voice requests, once ever).
+const warmFillers = () => setTimeout(async () => { for (const t of fillers()) await clip(t).catch(() => {}); }, 15000).unref?.();
+
+module.exports = { speak, stop, warm, shutdown, filler, warmFillers };
