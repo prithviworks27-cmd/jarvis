@@ -265,7 +265,8 @@ const events = new EventEmitter();
 const browser = require('./browsers')({ run, osa });
 const control = require('./control')({ run, osa, fn, browser });
 for (const t of Object.values(control.tools)) t.group = 'control';
-Object.assign(tools, control.tools, require('./memory').tools(fn), require('./extras')({ run, osa, fn, confirm: control.confirm, events, browser }));
+Object.assign(tools, control.tools, require('./memory').tools(fn), require('./extras')({ run, osa, fn, confirm: control.confirm, events, browser, getTool: (name) => tools[name] }));
+Object.assign(tools, require('./youtube')({ fn, browser }));
 
 // Air quality. With a free WAQI token (https://aqicn.org/data-platform/token/, JARVIS_WAQI_TOKEN in .env) it reads real
 // monitoring stations, which is what people quote for Delhi. Without one it uses Open-Meteo's free satellite/model estimate,
@@ -304,6 +305,7 @@ tools.web_search.def.function.description = 'ONLY to put a Google results page o
 
 // Internal checks for the fast paths (local.js). Never sent to the model.
 tools.__front_app = { hidden: true, def: fn('__front_app', 'internal'), run: () => osa('tell application "System Events" to get name of first application process whose frontmost is true') };
+tools.__discord_running = { hidden: true, def: fn('__discord_running', 'internal'), run: () => run('pgrep', ['-x', 'Discord']).then(() => 'yes', () => 'no') };
 tools.__music_open = { hidden: true, def: fn('__music_open', 'internal'), run: async () => ((await Promise.all(['Spotify', 'Music'].map((a) => run('pgrep', ['-x', a]).then(() => true, () => false)))).some(Boolean) ? 'yes' : 'no') };
 
 // One call for "what's my day": every part is fetched at once, and a part that fails is just left out.
@@ -325,10 +327,10 @@ for (const name of ['weather', 'news', 'wikipedia', 'look_at_screen', 'get_clipb
 // Tool groups the brain can leave out of a request. Core tools (no group) are always sent. A group is sent when the request
 // (or the one before it, for follow-ups such as "and the second one?") sounds like it, or when the model calls use_tools.
 const GROUPS = {
-  control: /whats ?app|chat|message|\btype\b|\bwrite\b|\btext\b|press|click|\btabs?\b|chrome|safari|brave|browser|\bkeys?\b|send|reply|button|scroll|bhej|likh|dabao|khol/i,
+  control: /discord|\bmute me\b|deafen|\bvoice (call|channel)\b|whats ?app|chat|message|\btype\b|\bwrite\b|\btext\b|press|click|\btabs?\b|chrome|safari|brave|browser|\bkeys?\b|send|reply|button|scroll|bhej|likh|dabao|khol/i,
   github: /git ?hub|\brepos?\b|repositor|pull request|\bprs?\b|\bissues?\b|commit|\bci\b|\bbuild\b|workflow|pipeline|notification/i,
   files: /\bfiles?\b|folder|document|\bpdf\b|resume|\bcv\b|\bdocs?\b|download|desktop|finder|spreadsheet|notes? file|\.(txt|md|pdf|docx?)\b/i,
-  media: /music|song|\bplay|pause|resume|\bskip|next track|previous|\btrack|spotify|playing|album|artist|playlist|gaana|gana/i,
+  media: /music|song|\bplay|pause|resume|\bskip|next track|previous|\btrack|spotify|playing|album|artist|playlist|gaana|gana|youtube|channel|\bvideos?\b|\bwatch|shorts|\b(first|second|third|fourth|fifth)\b/i,
   web: /\bpage\b|article|website|\bsite\b|\blink\b|summar|search|look up|google|price|cost|latest|internet|online|review|how (do|to|can)|\bvs\b|compare/i,
   system: /battery|charge|disk|storage|space|uptime|dark mode|light mode|timer|alarm|remind me in|minutes?\b|seconds?\b|calculat|percent|\bplus\b|\bminus\b|\btimes\b|divided|\d\s*[-+*/x%^]\s*\d|\d\s*%|how much is|square root|memory|ram\b/i,
 };

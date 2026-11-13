@@ -15,9 +15,9 @@ const history = [];
 // Turns that fell out of `history`, kept as a few short lines so "what did I ask you earlier?" and "that repo" still work.
 const earlier = [];
 // Actions whose success needs no spoken words: when the model only calls these and they all worked, skip the second model call (about a second faster).
-const QUIET = new Set(['whatsapp_open_chat', 'switch_tab', 'open_app', 'open_url', 'web_search', 'set_volume', 'set_mute', 'lock_screen', 'set_clipboard', 'add_reminder', 'media_control', 'open_file', 'set_dark_mode', 'use_tools']);
+const QUIET = new Set(['whatsapp_open_chat', 'switch_tab', 'open_app', 'open_url', 'web_search', 'set_volume', 'set_mute', 'lock_screen', 'set_clipboard', 'add_reminder', 'media_control', 'open_file', 'set_dark_mode', 'youtube_channel', 'youtube_search', 'youtube_play', 'youtube_play_nth', 'discord_voice', 'use_tools']);
 // The model can ask for a tool group the request did not obviously need (handled here, not in tools.js).
-const USE_TOOLS = fn('use_tools', `Load more tools when none of yours fit the request, then use them. Groups: control (type, click, press keys, WhatsApp, browser tabs), github (repos, pull requests, issues, CI), files (find, read, open files and PDFs), media (play or control music), web (search the web for answers, read a page), system (battery, disk, dark mode, timers, calculator).`,
+const USE_TOOLS = fn('use_tools', `Load more tools when none of yours fit the request, then use them. Groups: control (type, click, press keys, WhatsApp, Discord voice, browser tabs), github (repos, pull requests, issues, CI), files (find, read, open files and PDFs), media (play or control music; YouTube channels, search and playing videos), web (search the web for answers, read a page), system (battery, disk, dark mode, timers, calculator).`,
   { group: { type: 'string', enum: Object.keys(GROUPS) } }, ['group']);
 // Anything that may need a follow-up step or a spoken answer (a question, "and/then", or words like send/type/write that continue after opening something) takes the normal two-call path.
 const ASKS_SOMETHING = /\?|\b(and|then|also|after|before|send|type|write|reply|text|tell|ask|say|read|check|click|press|play|search|find|what|how|when|who|where|bhejo|bhej|likho|likh|batao|bata|dikhao|padho|kya|kaun|kab|kahan|kaise|aur|phir|fir)\b|[\u0900-\u097F]/i; // includes common Hinglish words and any Devanagari
@@ -44,6 +44,8 @@ const memoryNote = (userText) => {
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const BROWSER_WORDS = { safari: 1, chrome: 1, 'google chrome': 1, brave: 1, edge: 1, 'microsoft edge': 1, vivaldi: 1, chromium: 1 };
 
 // A timeout comes back as a fake 408 response, so the fallbacks below treat "too slow" like any other failure.
 async function request(model, messages, tools, ms = 20000) {
@@ -123,6 +125,8 @@ async function ask(userText, { onTool } = {}) {
     userName: process.env.JARVIS_USER_NAME,
     front: () => runTool('__front_app', {}).then((r) => r.replace(/^Error: /, '')),
     musicOpen: () => runTool('__music_open', {}).then((r) => r === 'yes'),
+    youtubeList: () => runTool('__youtube_list', {}).then((r) => r === 'yes'),
+    discordRunning: () => runTool('__discord_running', {}).then((r) => r === 'yes'),
   }).catch(() => null);
   if (quick) {
     let reply = '';
@@ -153,6 +157,8 @@ async function ask(userText, { onTool } = {}) {
     const name = call.function.name;
     let args = {};
     try { args = JSON.parse(call.function.arguments || '{}'); } catch { /* model sent bad JSON; tool will report missing args */ }
+    // A browser is only honoured when the user's own words name it: the model otherwise fills the field in "to be helpful".
+    if (args.browser && !new RegExp(`\\b(?:${Object.keys(BROWSER_WORDS).join('|')})\\b`, 'i').test(userText)) delete args.browser;
     if (name === 'use_tools') {
       if (!GROUPS[args.group]) return `Error: there is no tool group called ${args.group}.`;
       groups.add(args.group);

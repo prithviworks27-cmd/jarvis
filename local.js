@@ -42,6 +42,12 @@ async function route(raw, ctx = {}) {
   if (!t || t.length > 60) return null;
   let m;
 
+  // "Play the second video": only when Alfred itself opened a YouTube channel or search a moment ago (it knows that list).
+  if ((m = t.match(/^(?:open|play|click(?:\s+on)?|watch|put\s+on|start)\s+(?:the\s+)?(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|last|\d{1,2}(?:st|nd|rd|th)?)\s+(?:video|one|result|clip)$/)) && ctx.youtubeList && await ctx.youtubeList()) {
+    const n = require('./youtube').ordinal(m[1].replace(/(?<=\d)(?:st|nd|rd|th)$/, ''));
+    if (n) return { tool: 'youtube_play_nth', args: { n } };
+  }
+
   // Open an app: only an exact installed app name. "open youtube" / "open rishabh" are for the model (site, chat).
   if ((m = t.match(/^(?:open|launch|start|switch to)\s+(?:the\s+)?(.+?)(?:\s+app)?$/) || t.match(/^(.+?)\s+(?:kholo|khol do|khol de|chalu karo|open karo)$/))) {
     const app = exactApp(m[1], ctx.apps || installedApps());
@@ -61,6 +67,11 @@ async function route(raw, ctx = {}) {
   // Scrolling, by the page keys of the app in front (the same allowed-app rules as every other key press).
   if ((m = t.match(/^scroll\s+(down|up)(?:\s+(?:a\s+)?(?:lot|bit|little|more))?$/))) return { tool: 'press_keys', args: { keys: m[1] === 'down' ? 'pagedown' : 'pageup' } };
   if ((m = t.match(/^(?:go\s+to\s+|scroll\s+to\s+)(?:the\s+)?(top|bottom)(?:\s+of\s+(?:the\s+)?(?:page|document))?$/))) return { tool: 'press_keys', args: { keys: m[1] === 'top' ? 'cmd+up' : 'cmd+down' } };
+
+  // Discord voice, only while Discord is running ("mute" alone is the Mac\'s volume, "mute me" is Discord).
+  if ((m = t.match(/^(mute|unmute)\s+(?:me|myself|my\s+(?:mic|microphone))$|^(deafen|undeafen)(?:\s+me)?$/)) && ctx.discordRunning && await ctx.discordRunning()) return { tool: 'discord_voice', args: { action: m[1] || m[2] } };
+  if (/^(?:am\s+i|is\s+my\s+(?:mic|microphone))\s+(?:muted|on\s+mute|deafened)$|^discord\s+status$/.test(t) && ctx.discordRunning && await ctx.discordRunning()) return { tool: 'discord_voice', args: { action: 'status' } };
+  if (/^(?:leave|exit|disconnect\s+from)\s+(?:the\s+)?(?:discord\s+)?(?:call|voice\s+call|voice\s+channel)$|^leave\s+discord(?:\s+call)?$/.test(t) && ctx.discordRunning && await ctx.discordRunning()) return { tool: 'discord_voice', args: { action: 'leave' } };
 
   // The Mac itself.
   if (/^(?:lock(?:\s+(?:the\s+)?(?:screen|mac|computer))?|turn\s+(?:the\s+)?(?:screen|display)\s+off)$/.test(t)) return { tool: 'lock_screen', args: {} };
