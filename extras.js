@@ -75,7 +75,7 @@ function calculate(expression) {
   return Number.isInteger(n) ? String(n) : String(Number(n.toPrecision(10)));
 }
 
-module.exports = ({ run, osa, fn, confirm, events }) => {
+module.exports = ({ run, osa, fn, confirm, events, browser }) => {
   // ---- GitHub, through the user's own `gh` login. Reading is free; changing anything public waits for the user's "yes". ----
   const GH = ['/opt/homebrew/bin/gh', '/usr/local/bin/gh'].find((p) => fs.existsSync(p)) || 'gh'; // autostart has a bare PATH
   const gh = async (...args) => {
@@ -335,16 +335,18 @@ end run`, q).catch(() => '');
     },
     read_page: {
       group: 'web', readOnly: true,
-      def: fn('read_page', 'Read the text of a web page so you can summarise it or answer from it. With no url, reads the page open in the front Chrome tab ("summarise this page").', { url: { type: 'string' } }),
+      def: fn('read_page', 'Read the text of a web page so you can summarise it or answer from it. With no url, reads the page open in the browser the user is working in ("summarise this page"), Safari or Chrome alike.', { url: { type: 'string' } }),
       run: async ({ url }) => {
         let text, where = url;
         if (!url) {
+          const b = await browser.current();
+          if (!b) throw new Error('No browser is open to read.');
           try {
-            text = await osa('tell application "Google Chrome" to tell active tab of front window to execute javascript "document.title + \'\\n\' + document.body.innerText.slice(0, 40000)"');
-            where = 'the Chrome tab';
+            text = await browser.pageText(b);
+            where = `the ${b} tab`;
           } catch {
-            const tab = await osa('tell application "Google Chrome" to return URL of active tab of front window').catch(() => '');
-            if (!tab) throw new Error('No Chrome tab is open to read.');
+            const tab = await browser.pageUrl(b).catch(() => '');
+            if (!tab) throw new Error(`No ${b} tab is open to read.`);
             where = tab;
             text = await fetchText(tab);
           }

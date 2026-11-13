@@ -11,7 +11,7 @@ const { closest } = require('./fuzzy');
 const { ensure } = require('./helpers');
 const { paste: realPaste } = require('./dictate');
 
-const LOG = path.join(os.homedir(), 'Library/Logs/jarvis-actions.log');
+const LOG = process.env.JARVIS_ACTION_LOG || path.join(os.homedir(), 'Library/Logs/jarvis-actions.log'); // tests log elsewhere
 const RISKY_WORDS = ['send', 'submit', 'buy', 'pay', 'purchase', 'order', 'delete', 'remove', 'confirm', 'transfer', 'post', 'publish', 'sign out', 'log out'];
 const RISKY_CLICK = new RegExp(RISKY_WORDS.join('|'), 'i');
 const KEYCODES = { return: 36, enter: 76, tab: 48, space: 49, delete: 51, escape: 53, left: 123, right: 124, down: 125, up: 126 };
@@ -21,7 +21,7 @@ const MODS = { cmd: 'command', command: 'command', ctrl: 'control', control: 'co
 const TYPED = new Set(['type_text', 'type_in_whatsapp_chat', 'whatsapp_type_to']);
 try { fs.chmodSync(LOG, 0o600); } catch { /* no log yet */ }
 
-const allowedApps = () => (process.env.JARVIS_CONTROL_APPS || 'Google Chrome,Safari,WhatsApp,Spotify,Music,Notes').split(',').map((s) => s.trim().toLowerCase());
+const allowedApps = () => (process.env.JARVIS_CONTROL_APPS || 'Google Chrome,Safari,Brave Browser,Microsoft Edge,WhatsApp,Spotify,Music,Notes').split(',').map((s) => s.trim().toLowerCase());
 
 // "cmd+f" -> `keystroke "f" using {command down}`; only validated pieces are ever put into the script.
 function keyScript(keys) {
@@ -35,7 +35,7 @@ function keyScript(keys) {
   throw new Error(`Unknown key "${key}".`);
 }
 
-// Runs inside the Chrome tab. The label is embedded with JSON.stringify so it can never break out of its string.
+// Runs inside the browser tab. The label is embedded with JSON.stringify so it can never break out of its string.
 // With no match it returns the visible labels so the model can retry with the exact wording.
 const pageClickScript = (text, double, confirmed = false) => `(() => {
   const words = (s) => String(s || '').toLowerCase().match(/[a-z0-9]+/g) || [];
@@ -73,7 +73,8 @@ const titleMatches = (title, name) => !!squash(name) && squash(title).includes(s
 // In a browser the macOS accessibility check cannot see web pages, so ask the page itself. If it cannot answer, do not type.
 const FIELD_JS = "(() => { const e = document.activeElement; return e ? (e.tagName === 'IFRAME' ? 'iframe' : (e.type || e.tagName)) : ''; })()";
 
-module.exports = ({ run, osa, fn, paste = realPaste }) => {
+module.exports = ({ run, osa, fn, paste = realPaste, browser }) => {
+  const br = browser || require('./browsers')({ run, osa });
   let pending = null;
 
   const log = (tool, args, result) => {
@@ -87,7 +88,7 @@ module.exports = ({ run, osa, fn, paste = realPaste }) => {
 
   // The model can never confirm for the user: the action is parked here and only the user's next "yes" (handled in brain.js) runs it.
   // `where` names the place it was asked about (front app, or Chrome tab). If that changed before the "yes", nothing runs.
-  const confirm = async (description, run, where) => {
+  const confirm = async (description, run, where, question = `${description} Shall I go ahead?`) => {
     const asked = await where();
     pending = {
       at: Date.now(),
@@ -96,7 +97,7 @@ module.exports = ({ run, osa, fn, paste = realPaste }) => {
         return run();
       },
     };
-    return `CONFIRMATION REQUIRED, nothing has been done yet. Ask the user exactly: "${description} Shall I go ahead?" and wait for their answer.`;
+    return `CONFIRMATION REQUIRED, nothing has been done yet. Ask the user exactly: "${question}" and wait for their answer.`;
   };
   const takePending = () => {
     const p = pending && Date.now() - pending.at < 60000 ? pending : null;
@@ -128,15 +129,22 @@ module.exports = ({ run, osa, fn, paste = realPaste }) => {
     const [x, y, w, h] = (await osa('tell application "System Events" to tell process "WhatsApp" to return (position of window 1) & (size of window 1)')).split(',').map(Number);
     return { x, y, w, h };
   };
+  const waWindows = async () => Number(await osa('tell application "System Events" to tell process "WhatsApp" to return count of windows').catch(() => '0')) || 0;
+  // Brings WhatsApp to the front with a window. A closed window (red button) does not come back with activate, so "reopen"
+  // it, as clicking the Dock icon does. With Stage Manager the window can take a moment: wait until it exists, not a fixed time.
   const waFront = async () => {
-    if ((await frontApp()).toLowerCase() !== 'whatsapp') {
-      await osa('tell application "WhatsApp" to activate');
-      // With Stage Manager the window can take a moment to come back: wait until it exists, not a fixed time.
-      for (let i = 0; i < 20; i++) {
-        await sleep(100);
-        if ((await frontApp()).toLowerCase() === 'whatsapp' && Number(await osa('tell application "System Events" to tell process "WhatsApp" to return count of windows')) > 0) break;
-      }
+    const front = (await frontApp()).toLowerCase() === 'whatsapp';
+    if (front && await waWindows() > 0) return requireAllowed();
+    // Quit entirely, it has to start and load its chats first, which takes several seconds.
+    const cold = !(await run('pgrep', ['-x', 'WhatsApp']).then(() => true, () => false));
+    if (cold) await run('open', ['-a', 'WhatsApp']);
+    await osa('tell application "WhatsApp"\nreopen\nactivate\nend tell');
+    for (let i = 0; i < (cold ? 200 : 30); i++) {
+      await sleep(100);
+      if ((await frontApp().catch(() => '')).toLowerCase() === 'whatsapp' && await waWindows() > 0) break;
     }
+    if (await waWindows() === 0) throw new Error(cold ? 'I started WhatsApp but its window did not appear within 20 seconds. Ask the user to try again in a moment.' : 'WhatsApp is open but its window did not come back. Ask the user to click WhatsApp in the Dock, then try again.');
+    if (cold) await sleep(3000); // the window shows before the chat list is ready to search
     await requireAllowed();
   };
   // Reads text in a part of the screen with the Mac's own OCR (free, on-device, about 0.3 s).
@@ -233,7 +241,9 @@ module.exports = ({ run, osa, fn, paste = realPaste }) => {
     throw new Error(`I searched WhatsApp for ${name} but no chat titled ${name} opened (only other chats or groups came up), so I typed nothing. Do not try again; tell the user.`);
   }
 
-  async function typeInChat(text, knownWindow) {
+  // The message box holds exactly what the user wants to send: by default the new text REPLACES any draft (repeating or
+  // correcting a message once left "how are you?how are you?" in the box). append=true adds to the draft instead.
+  async function typeInChat(text, knownWindow, append = false) {
     if (/[\r\n\t]/.test(text)) throw new Error('Only single-line text can be typed.');
     if (!knownWindow) await waFront(); // right after openChat, WhatsApp is already in front
     await stillInWhatsApp();
@@ -246,49 +256,52 @@ function run(argv) {
 }`, String(Math.round(x + 0.68 * w)), String(Math.round(y + h - 26))]);
     await sleep(100);
     await stillInWhatsApp();
-    await paste(text); // pasting is instant; typing key by key took seconds
-    return 'Typed in the WhatsApp message box (not sent).';
+    if (append) await sysevents('key code 124 using {command down}'); // to the end of the draft
+    else await sysevents('keystroke "a" using {command down}'); // select the draft so the paste replaces it
+    await paste(append ? ` ${text.trim()}` : text); // pasting is instant; typing key by key took seconds
+    return append ? 'Added to the WhatsApp message box (not sent).' : 'Typed in the WhatsApp message box, replacing any earlier draft (not sent).';
   }
 
+  // After typing, ask "Shall I send it?" right away; the user's own "yes" presses Return, but only if WhatsApp is still in
+  // front with the same chat open (its title is read again at the "yes").
+  const waPlace = async () => {
+    const app = await frontApp();
+    if (app.toLowerCase() !== 'whatsapp') return app;
+    const win = await waWindow().catch(() => null);
+    const title = win ? await ocr(win.x + 0.5 * win.w, win.y, 0.5 * win.w, 0.07 * win.h).then(chatTitle, () => null) : null;
+    return `${app}|${title}`;
+  };
+  const offerSend = (who) => confirm(`Send the WhatsApp message${who ? ` to ${who}` : ''}.`, async () => {
+    await stillInWhatsApp();
+    await requireAllowed();
+    await sysevents('key code 36');
+    log('whatsapp_send', { to: who || 'open chat' }, 'Return pressed');
+    return 'Sent.';
+  }, waPlace, `I've typed it${who ? ` for ${who}` : ''}. Shall I send it?`);
+
   const tools = {
-    focus_chrome_tab: {
-      def: fn('focus_chrome_tab', 'Switch to an already open Google Chrome tab whose title or address contains the text.', { query: { type: 'string' } }, ['query']),
-      run: logged('focus_chrome_tab', async ({ query }) => {
-        const title = await osa(`on run argv
-set q to item 1 of argv
-tell application "Google Chrome"
-  repeat with w in windows
-    set i to 0
-    repeat with t in tabs of w
-      set i to i + 1
-      if (title of t contains q) or (URL of t contains q) then
-        set active tab index of w to i
-        set index of w to 1
-        activate
-        return title of t
-      end if
-    end repeat
-  end repeat
-end tell
-error "No open Chrome tab matches " & q
-end run`, query);
-        return `Switched to "${title}".`;
-      }),
+    switch_tab: {
+      def: fn('switch_tab', 'Switch to an open browser tab by what it is about (its title or site), e.g. "DSA unit 1", "YouTube". Looks in the browser the user is working in first (Safari, Chrome, Brave...), then the other open browsers, and brings that browser to the front. Pass browser only if the user named one.',
+        { query: { type: 'string' }, browser: { type: 'string', description: 'only if the user named a browser, e.g. "Safari"' } }, ['query']),
+      run: logged('switch_tab', async ({ query, browser }) => br.switchTab(query, browser)),
     },
     whatsapp_open_chat: {
       def: fn('whatsapp_open_chat', 'Open the WhatsApp chat with a person or group by name (instant if it is already open). Does not type or send anything. If it fails, do not retry: tell the user.', { name: { type: 'string' } }, ['name']),
       run: logged('whatsapp_open_chat', async ({ name }) => openChat(await resolveName(name))),
     },
     type_in_whatsapp_chat: {
-      def: fn('type_in_whatsapp_chat', 'Type text into the message box of the WhatsApp chat that is currently open, without sending it. Use when the user says to type in this chat.', { text: { type: 'string' } }, ['text']),
-      run: logged('type_in_whatsapp_chat', async ({ text }) => typeInChat(text)),
+      def: fn('type_in_whatsapp_chat', 'Put a message in the box of the WhatsApp chat that is open now, without sending; it replaces any draft unless append is true. Then the user is asked whether to send.',
+        { text: { type: 'string', description: 'only the message itself, never the user\'s instructions' }, append: { type: 'boolean', description: 'true only when the user says to add to what is already typed' } }, ['text']),
+      run: logged('type_in_whatsapp_chat', async ({ text, append }) => `${await typeInChat(text, null, !!append)} ${await offerSend('')}`),
     },
     whatsapp_type_to: {
-      def: fn('whatsapp_type_to', 'Open the WhatsApp chat with a person (instant if already open) and type a message in it WITHOUT sending. Use for "type/write hi to Rishabh". Sending needs a separate press of return, which the user confirms.', { name: { type: 'string' }, text: { type: 'string' } }, ['name', 'text']),
-      run: logged('whatsapp_type_to', async ({ name, text }) => {
+      def: fn('whatsapp_type_to', 'Open the WhatsApp chat with a person (instant if already open) and put a message in its box WITHOUT sending: it replaces any draft unless append is true. Use for "send/type/write hi to Rishabh". Then the user is asked whether to send.',
+        { name: { type: 'string' }, text: { type: 'string', description: 'only the message itself, never the user\'s instructions such as "tell him" or "also add"' }, append: { type: 'boolean', description: 'true only when the user says to add to what is already typed' } }, ['name', 'text']),
+      run: logged('whatsapp_type_to', async ({ name, text, append }) => {
+        const who = await resolveName(name);
         const win = await waWindow().catch(() => null);
-        const opened = await openChat(await resolveName(name));
-        return `${opened} ${await typeInChat(text, win && await waWindow())}`;
+        const opened = await openChat(who);
+        return `${opened} ${await typeInChat(text, win && await waWindow(), !!append)} ${await offerSend(who)}`;
       }),
     },
     type_text: {
@@ -304,12 +317,10 @@ on error
 end try
 end tell`);
         if (role === 'AXSecureTextField') throw new Error('That is a password field, so I will not type into it.');
-        if (app === 'google chrome' || app === 'safari') {
+        if (br.isBrowser(app)) {
           let kind;
           try {
-            kind = await osa(app === 'safari'
-              ? 'on run argv\ntell application "Safari" to do JavaScript (item 1 of argv) in current tab of front window\nend run'
-              : 'on run argv\ntell application "Google Chrome" to tell active tab of front window to execute javascript (item 1 of argv)\nend run', FIELD_JS);
+            kind = await br.runJs(br.canonical(app), FIELD_JS);
           } catch {
             throw new Error('I cannot tell whether that box is a password field, so I will not type there. Turn on JavaScript from Apple Events in the browser, or type it yourself.');
           }
@@ -328,29 +339,25 @@ end tell`);
         return go();
       }),
     },
-    click_in_chrome_page: {
-      def: fn('click_in_chrome_page', 'Click a link, button or list item on the web page in the active Chrome tab by its visible text (e.g. a Google Drive file, a YouTube video). Use double=true to open items in file lists like Google Drive. If nothing matches, the result lists the visible labels: retry with one of them.',
+    click_in_page: {
+      def: fn('click_in_page', 'Click a link, button or list item on the web page in the front tab of the browser the user is working in (Safari, Chrome, Brave...) by its visible text, e.g. a Google Drive file or a YouTube video. Use double=true to open items in file lists like Google Drive. If nothing matches, the result lists the visible labels: retry with one of them.',
         { text: { type: 'string' }, double: { type: 'boolean' } }, ['text']),
-      run: logged('click_in_chrome_page', async ({ text, double }) => {
-        if (!allowedApps().includes('google chrome')) throw new Error('Google Chrome is not in the allowed apps list.');
-        const tabUrl = () => osa('tell application "Google Chrome" to return URL of active tab of front window');
+      run: logged('click_in_page', async ({ text, double }) => {
+        const b = await br.current();
+        if (!b) throw new Error('No browser is open.');
+        if (!allowedApps().includes(b.toLowerCase())) throw new Error(`${b} is not in the allowed apps list.`);
+        const tabUrl = () => br.pageUrl(b);
         const attempt = async (confirmed) => {
-          let out;
-          try {
-            out = await osa('on run argv\ntell application "Google Chrome" to tell active tab of front window to execute javascript (item 1 of argv)\nend run', pageClickScript(text, double, confirmed));
-          } catch (e) {
-            if (/turned off/i.test(e.message)) throw new Error('Chrome is blocking this. The user must turn on View > Developer > Allow JavaScript from Apple Events in Chrome.');
-            throw e;
-          }
+          const out = await br.runJs(b, pageClickScript(text, double, confirmed));
           if (out.startsWith('NOMATCH')) throw new Error(out);
-          if (out.startsWith('RISKY ')) return confirm(`Click "${out.slice(6)}" on the Chrome page.`, () => attempt(true), tabUrl);
+          if (out.startsWith('RISKY ')) return confirm(`Click "${out.slice(6)}" on the ${b} page.`, () => attempt(true), tabUrl);
           return out;
         };
-        return RISKY_CLICK.test(text) ? confirm(`Click "${text}" on the Chrome page.`, () => attempt(true), tabUrl) : attempt(false);
+        return RISKY_CLICK.test(text) ? confirm(`Click "${text}" on the ${b} page.`, () => attempt(true), tabUrl) : attempt(false);
       }),
     },
     click_ui_element: {
-      def: fn('click_ui_element', 'Click a button or row in a NATIVE app window (not a web page: use click_in_chrome_page for Chrome pages) by its visible label. The front app must be allowed. Can be slow in big windows.', { label: { type: 'string' } }, ['label']),
+      def: fn('click_ui_element', 'Click a button or row in a NATIVE app window (not a web page: use click_in_page for pages in a browser) by its visible label. The front app must be allowed. Can be slow in big windows.', { label: { type: 'string' } }, ['label']),
       run: logged('click_ui_element', async ({ label }) => {
         // The script reports "RISKY <label>" instead of clicking when the element it found sounds dangerous and the user has not said yes.
         const attempt = async (confirmed) => {
@@ -402,7 +409,7 @@ end run`, label, confirmed ? 'yes' : 'no', RISKY_WORDS.join('|'));
     },
   };
 
-  return { tools, takePending, confirm };
+  return { tools, takePending, confirm, browser: br };
 };
 module.exports.keyScript = keyScript;
 module.exports.pageClickScript = pageClickScript;

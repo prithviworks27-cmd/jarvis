@@ -75,19 +75,17 @@ const tools = {
     },
   },
   open_url: {
-    def: fn('open_url', 'Open an http(s) URL in the default browser.', { url: { type: 'string' } }, ['url']),
-    run: async ({ url }) => {
+    def: fn('open_url', 'Open an http(s) URL in the browser the user is working in, or in the browser they name.', { url: { type: 'string' }, browser: { type: 'string', description: 'only if the user named a browser, e.g. "Safari"' } }, ['url']),
+    run: async ({ url, browser: said }) => {
       if (!/^https?:\/\//i.test(url)) throw new Error('Only http(s) URLs are allowed.');
-      await run('open', [url]);
-      return `Opened ${url}.`;
+      const b = await browser.current(said);
+      await browser.openIn(url, b);
+      return `Opened ${url}${b ? ` in ${b}` : ''}.`;
     },
   },
   web_search: {
-    def: fn('web_search', 'Only to show the user a Google results page in their browser. To answer a question yourself, use news, weather or wikipedia instead.', { query: { type: 'string' } }, ['query']),
-    run: async ({ query }) => {
-      await run('open', ['https://www.google.com/search?q=' + encodeURIComponent(query)]);
-      return `Searched for ${query}.`;
-    },
+    def: fn('web_search', 'placeholder'),
+    run: async () => '',
   },
   weather: {
     def: fn('weather', 'Get current weather and today/tomorrow forecast for a city. Omit city to use the user\'s default city.', { city: { type: 'string' } }),
@@ -259,9 +257,10 @@ end tell`),
 
 // Timers and other things that happen later reach the voice through these events (main.js listens for 'announce').
 const events = new EventEmitter();
-const control = require('./control')({ run, osa, fn });
+const browser = require('./browsers')({ run, osa });
+const control = require('./control')({ run, osa, fn, browser });
 for (const t of Object.values(control.tools)) t.group = 'control';
-Object.assign(tools, control.tools, require('./memory').tools(fn), require('./extras')({ run, osa, fn, confirm: control.confirm, events }));
+Object.assign(tools, control.tools, require('./memory').tools(fn), require('./extras')({ run, osa, fn, confirm: control.confirm, events, browser }));
 
 // Air quality. With a free WAQI token (https://aqicn.org/data-platform/token/, JARVIS_WAQI_TOKEN in .env) it reads real
 // monitoring stations, which is what people quote for Delhi. Without one it uses Open-Meteo's free satellite/model estimate,
@@ -290,11 +289,13 @@ tools.air_quality = {
     return `${geo.name} air quality (a satellite and model ESTIMATE, not a ground station): US AQI ${c.us_aqi} (${AQI_BAND(c.us_aqi)}), PM2.5 ${c.pm2_5} µg/m³, PM10 ${c.pm10} µg/m³. Tell the user this is an estimate and that street-level monitors in polluted cities, Delhi especially, often read considerably higher${token ? '' : '; a free station-based source needs JARVIS_WAQI_TOKEN in .env'}.`;
   },
 };
-tools.web_search.run = async ({ query }) => {
-  await run('open', ['https://www.google.com/search?q=' + encodeURIComponent(query)]);
-  return `Opened a Google results page for "${query}" on the user's screen. I have NOT read it, so I know nothing from it: never answer a question from this. For an answer use search_web, weather, air_quality, news or wikipedia.`;
+tools.web_search.def = fn('web_search', 'x', { query: { type: 'string' }, browser: { type: 'string', description: 'only if the user named a browser, e.g. "Safari"' } }, ['query']);
+tools.web_search.run = async ({ query, browser: said }) => {
+  const b = await browser.current(said);
+  await browser.openIn('https://www.google.com/search?q=' + encodeURIComponent(query), b);
+  return `Opened a Google results page for "${query}"${b ? ` in ${b}` : ''} on the user's screen. I have NOT read it, so I know nothing from it: never answer a question from this. For an answer use search_web, weather, air_quality, news or wikipedia.`;
 };
-tools.web_search.def.function.description = 'ONLY to put a Google results page on the user\'s screen when they ask to see it. It returns no results to you. To answer a question yourself use search_web, air_quality, weather, news or wikipedia.';
+tools.web_search.def.function.description = 'ONLY to put a Google results page on the user\'s screen when they ask to see it (in the browser they are working in, or the one they name). It returns no results to you. To answer a question yourself use search_web, air_quality, weather, news or wikipedia.';
 
 // One call for "what's my day": every part is fetched at once, and a part that fails is just left out.
 tools.daily_briefing = {
@@ -315,7 +316,7 @@ for (const name of ['weather', 'news', 'wikipedia', 'look_at_screen', 'get_clipb
 // Tool groups the brain can leave out of a request. Core tools (no group) are always sent. A group is sent when the request
 // (or the one before it, for follow-ups such as "and the second one?") sounds like it, or when the model calls use_tools.
 const GROUPS = {
-  control: /whats ?app|chat|message|\btype\b|\bwrite\b|\btext\b|press|click|\btab\b|chrome|\bkeys?\b|send|reply|button|scroll|bhej|likh|dabao|khol/i,
+  control: /whats ?app|chat|message|\btype\b|\bwrite\b|\btext\b|press|click|\btabs?\b|chrome|safari|brave|browser|\bkeys?\b|send|reply|button|scroll|bhej|likh|dabao|khol/i,
   github: /git ?hub|\brepos?\b|repositor|pull request|\bprs?\b|\bissues?\b|commit|\bci\b|\bbuild\b|workflow|pipeline|notification/i,
   files: /\bfiles?\b|folder|document|\bpdf\b|resume|\bcv\b|\bdocs?\b|download|desktop|finder|spreadsheet|notes? file|\.(txt|md|pdf|docx?)\b/i,
   media: /music|song|\bplay|pause|resume|\bskip|next track|previous|\btrack|spotify|playing|album|artist|playlist|gaana|gana/i,
@@ -338,4 +339,4 @@ async function runTool(name, args) {
   }
 }
 
-module.exports = { definitions, definitionsFor, groupsFor, GROUPS, isReadOnly, runTool, takePending: control.takePending, events };
+module.exports = { browser, definitions, definitionsFor, groupsFor, GROUPS, isReadOnly, runTool, takePending: control.takePending, events };

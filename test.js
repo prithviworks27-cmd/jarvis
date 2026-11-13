@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 process.env.JARVIS_MEMORY_FILE = path.join(os.tmpdir(), `jarvis-test-memory-${process.pid}.json`); // never touch the real memory
+process.env.JARVIS_ACTION_LOG = path.join(os.tmpdir(), `jarvis-test-actions-${process.pid}.log`); // nor the real action log
 const { definitions, runTool } = require('./tools');
 
 const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) => e.message);
@@ -64,6 +65,64 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   await fake.tools.press_keys.run({ keys: 'return' });
   await fake.takePending().run();
   assert.strictEqual(sent.length, 1, 'the key is pressed once, in the right app');
+  // WhatsApp typing replaces the draft (repeating a message once left it in the box twice), adds only with append, then asks
+  // "Shall I send it?"; only the user's yes presses Return, and only with WhatsApp still in front (fake WhatsApp: no real keys).
+  {
+    const keys = [], pasted = [];
+    let app = 'WhatsApp';
+    const waOsa = async (script) => {
+      if (script.includes('frontmost is true')) return app;
+      if (script.includes('position of window 1')) return '0, 0, 1000, 800';
+      if (script.includes('count of windows')) return '1';
+      if (script.includes('System Events')) keys.push(script.replace(/^.*System Events" to /s, '').replace(/\nend run$/, ''));
+      return '';
+    };
+    const wa = require('./control')({ run: async () => '', osa: waOsa, paste: async (t) => { pasted.push(t); }, fn: (name) => ({ function: { name } }) });
+    const first = await runWith(wa, 'type_in_whatsapp_chat', { text: 'how are you Rishabh?' });
+    assert.match(first, /replacing any earlier draft[\s\S]*CONFIRMATION REQUIRED[\s\S]*Shall I send it\?/);
+    assert.ok(keys.some((k) => k.includes('keystroke "a" using {command down}')), 'the draft is selected so the paste replaces it');
+    assert.ok(!keys.some((k) => k.includes('key code 36')), 'typing never presses Return');
+    keys.length = 0;
+    await runWith(wa, 'type_in_whatsapp_chat', { text: 'please send me the details.', append: true });
+    assert.ok(keys.some((k) => k.includes('key code 124 using {command down}')) && !keys.some((k) => k.includes('keystroke "a"')), 'append goes to the end, keeps the draft');
+    assert.deepStrictEqual(pasted, ['how are you Rishabh?', ' please send me the details.']);
+    keys.length = 0;
+    app = 'Safari'; // the user moved before saying yes
+    await assert.rejects(wa.takePending().run(), /moved to a different place/);
+    assert.ok(!keys.some((k) => k.includes('key code 36')), 'no Return outside WhatsApp');
+    app = 'WhatsApp';
+    await runWith(wa, 'type_in_whatsapp_chat', { text: 'hi' });
+    assert.strictEqual(await wa.takePending().run(), 'Sent.');
+    assert.strictEqual(keys.filter((k) => k.includes('key code 36')).length, 1, 'yes presses Return once');
+  }
+  // Browser tabs: any browser, and a misheard word still finds the tab ("DSC Unit 1" was said for the Safari tab "DSA Unit 1").
+  {
+    const { bestTab, canonical } = require('./browsers');
+    const tabs = [{ browser: 'Safari', w: 1, t: 1, title: 'DSA Unit 1 - Arrays and Linked Lists', url: 'https://example.edu/dsa/unit1' },
+      { browser: 'Safari', w: 1, t: 2, title: 'YouTube', url: 'https://www.youtube.com/' }, { browser: 'Safari', w: 1, t: 3, title: 'DSA Unit 2 - Trees', url: 'https://example.edu/dsa/unit2' }];
+    assert.strictEqual(bestTab(tabs, 'DSC Unit 1').t, 1);
+    assert.strictEqual(bestTab(tabs, 'my youtube tab').t, 2);
+    assert.strictEqual(bestTab(tabs, 'unit 2 on safari').t, 3);
+    assert.strictEqual(bestTab(tabs, 'netflix'), null, 'nothing close: no switch');
+    assert.strictEqual(canonical('chrome'), 'Google Chrome');
+    assert.strictEqual(canonical('Brave'), 'Brave Browser');
+    assert.strictEqual(canonical('Safari'), 'Safari');
+    assert.strictEqual(canonical('Notes'), null);
+    // The tab is looked for in the browser the user is in (fake Safari in front, Chrome also open): Safari's tab is shown.
+    const shown = [];
+    const fakeRun = async (cmd, args) => { if (cmd === 'pgrep' && !['Safari', 'Google Chrome'].includes(args[1])) throw new Error('no'); return ''; };
+    const fakeOsa2 = async (script) => {
+      if (script.includes('frontmost is true')) return 'Safari';
+      if (script.includes('repeat with t in tabs of w')) return script.includes('"Safari"') ? '1\t1\tDSA Unit 1 - Arrays\thttps://x.edu/1\n1\t2\tYouTube\thttps://youtube.com/\n' : '1\t1\tDSA Unit 1 notes\thttps://docs.google.com/\n';
+      shown.push(script); return '';
+    };
+    const brw = require('./browsers')({ run: fakeRun, osa: fakeOsa2 });
+    assert.match(await brw.switchTab('DSC unit 1'), /in Safari/);
+    assert.ok(shown.some((s) => s.includes('tell application "Safari"') && s.includes('set current tab of window 1 to tab 1')));
+    assert.strictEqual(await brw.current(), 'Safari');
+    assert.strictEqual(await brw.current('chrome'), 'Google Chrome', 'a browser the user names wins');
+    await assert.rejects(brw.current('Netscape'), /do not know a browser/);
+  }
   // Password-field rule in browsers: fail closed when the page cannot be asked (fake osa, nothing is typed).
   let field = 'text';
   const typed = [];
@@ -285,5 +344,6 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   } finally {
     global.fetch = realFetch;
   }
+  fs.rmSync(process.env.JARVIS_ACTION_LOG, { force: true });
   console.log('ok');
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -7,7 +7,7 @@ const os = require('os');
 const { ensure, ensureApp } = require('./helpers');
 const { transcribe } = require('./stt');
 const { ask, cancel } = require('./brain');
-const { events } = require('./tools');
+const { events, browser } = require('./tools');
 const speech = require('./speak');
 const { cleanDictation, pasteText } = require('./dictate');
 
@@ -219,7 +219,7 @@ if (gotLock) app.whenReady().then(async () => {
   speech.warm();
   if (process.env.JARVIS_FILLER !== '0') speech.warmFillers();
   events.on('announce', (text) => announce(text));
-  ipcMain.on('listen-start', () => { turn++; busy = true; speech.stop(); cancel(); wakeListening(false); cue('Tink'); }); // talking again also stops any action in progress
+  ipcMain.on('listen-start', () => { browser.noteFront(); turn++; busy = true; speech.stop(); cancel(); wakeListening(false); cue('Tink'); }); // talking again also stops any action in progress
   ipcMain.on('listen-end', () => { busy = false; wakeListening(true); }); // recording ended with nothing said
   ipcMain.on('problem', (_e, kind) => PROBLEMS[kind] && speech.speak(PROBLEMS[kind]));
   ipcMain.on('log', (_e, msg) => console.log(`${stamp()} [ui] ${String(msg).slice(0, 200)}`)); // the page's own notes for the log
