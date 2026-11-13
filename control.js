@@ -4,6 +4,7 @@
 // - no typing into password fields, no multi-line text
 // - every action is appended to ~/Library/Logs/jarvis-actions.log
 const fs = require('fs');
+const { execFile } = require('child_process');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
@@ -14,7 +15,7 @@ const { paste: realPaste } = require('./dictate');
 const LOG = process.env.JARVIS_ACTION_LOG || path.join(os.homedir(), 'Library/Logs/jarvis-actions.log'); // tests log elsewhere
 const RISKY_WORDS = ['send', 'submit', 'buy', 'pay', 'purchase', 'order', 'delete', 'remove', 'confirm', 'transfer', 'post', 'publish', 'sign out', 'log out'];
 const RISKY_CLICK = new RegExp(RISKY_WORDS.join('|'), 'i');
-const KEYCODES = { return: 36, enter: 76, tab: 48, space: 49, delete: 51, escape: 53, left: 123, right: 124, down: 125, up: 126 };
+const KEYCODES = { return: 36, enter: 76, tab: 48, space: 49, delete: 51, escape: 53, left: 123, right: 124, down: 125, up: 126, pagedown: 121, pageup: 116, home: 115, end: 119 };
 const MODS = { cmd: 'command', command: 'command', ctrl: 'control', control: 'control', alt: 'option', option: 'option', shift: 'shift' };
 
 // What you type may be private, so the log records only how much was typed. Owner-only file.
@@ -70,10 +71,37 @@ const squash = (t) => String(t).toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
 // "Rishabh" matches the titles "Rishabh" and "Rishabh Sharma", never "YT" or "Rishabh, Suryansh, You".
 const titleMatches = (title, name) => !!squash(name) && squash(title).includes(squash(name));
 
+// Which chat did the user mean? `rows` come from WhatsApp's own chat list or search results ({ name, section }).
+// An exact name wins; a partial one (every word said starts a word of the name) counts only when it is the only candidate:
+// two candidates ("Ma" -> Maa, Mansi) must be asked about, never guessed. People come before groups of the same name.
+const wordsOf = (t) => String(t).toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
+function pickChat(rows, spoken) {
+  const q = squash(spoken);
+  if (!q) return { none: true };
+  const person = (a, b) => (a.section === 'Groups in common') - (b.section === 'Groups in common');
+  const exact = rows.filter((r) => squash(r.name) === q).sort(person);
+  if (exact.length) return { row: exact[0], exact: true };
+  const qw = wordsOf(spoken);
+  const partial = rows.filter((r) => { const w = wordsOf(r.name); return qw.every((x) => w.some((y) => y.startsWith(x))); }).sort(person);
+  const names = [...new Set(partial.map((r) => r.name))];
+  if (names.length === 1) return { row: partial[0], exact: false };
+  if (names.length > 1) return { ambiguous: names };
+  return { none: true };
+}
+// The helper's plain "key=value" and tab-separated lines.
+const parseState = (out) => Object.fromEntries(String(out).split('\n').filter((l) => l.includes('=')).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+const parseRows = (out) => String(out).split('\n').filter((l) => l.includes('\t')).map((l) => { const [kind, section, name, preview] = l.split('\t'); return { kind, section, name, preview }; });
+const sameText = (a, b) => String(a).replace(/\s+/g, ' ').trim() === String(b).replace(/\s+/g, ' ').trim();
+
 // In a browser the macOS accessibility check cannot see web pages, so ask the page itself. If it cannot answer, do not type.
 const FIELD_JS = "(() => { const e = document.activeElement; return e ? (e.tagName === 'IFRAME' ? 'iframe' : (e.type || e.tagName)) : ''; })()";
 
-module.exports = ({ run, osa, fn, paste = realPaste, browser }) => {
+// Runs the accessibility helper (helpers/wachat.swift) and returns { code, out }; never throws.
+const realWachat = (args) => ensure('wachat').then((bin) => new Promise((resolve) => {
+  execFile(bin, args, { timeout: 10000 }, (err, out, errout) => resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, out: String(out || errout || '').trim() }));
+}), (e) => ({ code: 1, out: e.message }));
+
+module.exports = ({ run, osa, fn, paste = realPaste, browser, wachat = realWachat }) => {
   const br = browser || require('./browsers')({ run, osa });
   let pending = null;
 
@@ -133,9 +161,15 @@ module.exports = ({ run, osa, fn, paste = realPaste, browser }) => {
   // Brings WhatsApp to the front with a window. A closed window (red button) does not come back with activate, so "reopen"
   // it, as clicking the Dock icon does. With Stage Manager the window can take a moment: wait until it exists, not a fixed time.
   const waFront = async () => {
-    const front = (await frontApp()).toLowerCase() === 'whatsapp';
-    if (front && await waWindows() > 0) return requireAllowed();
-    // Quit entirely, it has to start and load its chats first, which takes several seconds.
+    // One script for "is WhatsApp in front with a window?" (each osascript costs about 0.2 s); it errors when WhatsApp is not running.
+    const info = await osa('tell application "System Events" to return (name of first application process whose frontmost is true) & "|" & (count of windows of process "WhatsApp")').catch(() => '|0');
+    const [front, wins] = info.split('|');
+    if (front.toLowerCase() === 'whatsapp' && Number(wins) > 0) {
+      if (!allowedApps().includes('whatsapp')) throw new Error(`I am not allowed to control WhatsApp. Allowed apps are ${allowedApps().join(', ')}.`);
+      return;
+    }
+    // Quit entirely, it has to start and load its chats first, which takes several seconds. A closed window does not come back
+    // with activate alone, so "reopen" it, as clicking the Dock icon does. With Stage Manager the window can take a moment.
     const cold = !(await run('pgrep', ['-x', 'WhatsApp']).then(() => true, () => false));
     if (cold) await run('open', ['-a', 'WhatsApp']);
     await osa('tell application "WhatsApp"\nreopen\nactivate\nend tell');
@@ -279,6 +313,111 @@ function run(argv) {
     return 'Sent.';
   }, waPlace, `I've typed it${who ? ` for ${who}` : ''}. Shall I send it?`);
 
+  // ---- WhatsApp through its accessibility tree (exact names, read-back checks, the real send button). The OCR and keyboard code above
+  // is the fallback when the helper cannot run (no Accessibility permission). ----
+  const axFail = (msg) => Object.assign(new Error(msg), { ax: true });
+  const waState = async () => {
+    const r = await wachat(['state']);
+    if (r.code !== 0) throw axFail(`I cannot read WhatsApp: ${r.out.split('\n')[0]}`);
+    return parseState(r.out);
+  };
+  // Searching leaves WhatsApp in search mode: suggestion chips cover the chat list, and the list's rows are still reported
+  // although they are hidden. Clear the box and press Escape, then wait until the list is really back.
+  const leaveSearch = async () => {
+    for (let i = 0; i < 3; i++) {
+      if ((await waState()).searching !== 'yes') return;
+      await wachat(['clear-search']);
+      await stillInWhatsApp();
+      await sysevents('key code 53');
+      await sleep(350);
+    }
+  };
+  const waRows = async () => { const r = await wachat(['rows']); if (r.code !== 0) throw axFail(r.out); return parseRows(r.out); };
+  const waPlaceAX = async () => {
+    const app = await frontApp();
+    if (app.toLowerCase() !== 'whatsapp') return app;
+    return `${app}|${(await waState().catch(() => ({ title: '?' }))).title}`;
+  };
+
+  async function openChatAX(spoken) {
+    await waFront();
+    let now = await waState();
+    if (now.searching === 'yes') { await leaveSearch(); now = await waState(); }
+    if (squash(now.title) === squash(spoken)) return { title: now.title, already: true };
+    const press = async (kind, row) => {
+      const r = await wachat(['press', kind, row.section || '', row.name]);
+      if (r.code !== 0) return null;
+      await sleep(250);
+      await leaveSearch();
+      for (let i = 0; i < 12; i++) { // the title names the chat once it is open
+        const st = await waState();
+        if (squash(st.title) === squash(row.name)) return { title: st.title, already: false };
+        await sleep(150);
+      }
+      throw new Error(`I pressed the chat for ${row.name} in WhatsApp but it did not open. Do not try again; tell the user.`);
+    };
+    // 1. A chat in the visible list with exactly that name.
+    const listPick = pickChat((await waRows()).filter((r) => r.kind === 'list'), spoken);
+    if (listPick.row && listPick.exact) { const got = await press('list', listPick.row); if (got) return got; }
+    // 2. Search: it covers every chat, and its results are labelled (Chats / Groups in common), so a group is never taken for a person.
+    await stillInWhatsApp();
+    await osa('on run argv\ntell application "System Events"\nkeystroke "f" using {command down}\ndelay 0.15\nkeystroke "a" using {command down}\ndelay 0.1\nkeystroke (item 1 of argv)\nend tell\nend run', spoken);
+    let results = [], last = '';
+    for (let i = 0; i < 14; i++) { // wait for the results to appear and stop changing
+      await sleep(250);
+      results = (await waRows()).filter((r) => r.kind === 'result');
+      const sig = results.map((r) => r.name).join('|');
+      if (results.length && sig === last) break;
+      last = sig;
+    }
+    const pick = pickChat(results, spoken);
+    if (pick.ambiguous) { await leaveSearch(); throw new Error(`Several chats match "${spoken}": ${pick.ambiguous.slice(0, 5).join(', ')}. Ask the user which one; do not guess.`); }
+    if (pick.row) { const got = await press('result', pick.row); if (got) return got; }
+    if (listPick.row) { const got = await press('list', listPick.row); if (got) return got; }
+    await leaveSearch();
+    throw new Error(`I searched WhatsApp for ${spoken} but no chat with that name came up, so I typed nothing. Do not try again; tell the user.`);
+  }
+
+  // Puts `text` in the message box and reads it back. Replaces the draft unless append.
+  async function typeInChatAX(text, append, expectTitle) {
+    if (/[\r\n\t]/.test(text)) throw new Error('Only single-line text can be typed.');
+    await waFront();
+    const before = await waState();
+    if (expectTitle && squash(before.title) !== squash(expectTitle)) throw new Error(`WhatsApp is showing ${before.title || 'a different chat'}, not ${expectTitle}, so I typed nothing.`);
+    if ((await wachat(['click-composer'])).code !== 0) throw new Error('I could not find the message box in WhatsApp, so I typed nothing.');
+    await sleep(100);
+    await stillInWhatsApp();
+    // Cmd+A only when there is a draft to replace: in an empty box it selects the chat's messages instead, and the paste goes nowhere.
+    if (append && before.draft) await sysevents('key code 124 using {command down}'); // to the end of the draft
+    else if (!append && before.draft) await sysevents('keystroke "a" using {command down}'); // select the draft so the paste replaces it
+    await paste(append && before.draft ? ` ${text.trim()}` : text);
+    const want = append && before.draft ? `${before.draft} ${text.trim()}` : text;
+    let after = await waState();
+    for (let i = 0; i < 8 && !sameText(after.draft, want); i++) { await sleep(200); after = await waState(); } // the paste can land a moment late
+    if (!sameText(after.draft, want)) throw new Error(`The text did not land correctly in the message box (it shows "${after.draft.slice(0, 60)}"), so I will not send it. Do not try again; tell the user.`);
+    return { title: after.title, draft: after.draft, replaced: !append && before.draft && !sameText(before.draft, text) ? before.draft : '' };
+  }
+
+  // Asks "Shall I send it?" (or a custom question). Only the user's own "yes" runs this, and only with the same chat open and
+  // the same text in its box; it presses WhatsApp's real send button and checks the box emptied.
+  const offerSendAX = (title, draft, question) => confirm(`Send "${draft.slice(0, 80)}" to ${title}.`, async () => {
+    await stillInWhatsApp();
+    await requireAllowed();
+    const st = await waState();
+    if (squash(st.title) !== squash(title)) throw new Error(`WhatsApp is showing ${st.title || 'another chat'} now, not ${title}, so I did not send.`);
+    if (!st.draft.trim()) throw new Error('The message box is empty, so there is nothing to send.');
+    if (!sameText(st.draft, draft)) throw new Error('The message in the box changed since I asked, so I did not send it.');
+    if ((await wachat(['press-send'])).code !== 0) await sysevents('key code 36'); // no send button found: Return
+    let gone = false;
+    for (let i = 0; i < 12 && !gone; i++) { await sleep(150); gone = !(await waState()).draft.trim(); }
+    log('whatsapp_send', { to: title }, gone ? 'sent' : 'pressed, box not empty');
+    if (!gone) throw new Error(`I pressed send but the message is still in the box for ${title}. Ask the user to check WhatsApp.`);
+    return `Sent to ${title}.`;
+  }, waPlaceAX, question || `I've typed it for ${title}. Shall I send it?`);
+
+  // AX first; the old way only when the helper cannot run at all.
+  const viaAX = async (ax, legacy) => { try { return await ax(); } catch (e) { if (!e.ax) throw e; console.error(`[whatsapp] accessibility helper unavailable (${e.message}); using the old way`); return legacy(); } };
+
   const tools = {
     switch_tab: {
       def: fn('switch_tab', 'Switch to an open browser tab by what it is about (its title or site), e.g. "DSA unit 1", "YouTube". Looks in the browser the user is working in first (Safari, Chrome, Brave...), then the other open browsers, and brings that browser to the front. Pass browser only if the user named one.',
@@ -287,21 +426,42 @@ function run(argv) {
     },
     whatsapp_open_chat: {
       def: fn('whatsapp_open_chat', 'Open the WhatsApp chat with a person or group by name (instant if it is already open). Does not type or send anything. If it fails, do not retry: tell the user.', { name: { type: 'string' } }, ['name']),
-      run: logged('whatsapp_open_chat', async ({ name }) => openChat(await resolveName(name))),
+      run: logged('whatsapp_open_chat', async ({ name }) => {
+        const who = await resolveName(name);
+        return viaAX(async () => { const o = await openChatAX(who); return o.already ? `The WhatsApp chat for ${o.title} is already open.` : `Opened the WhatsApp chat for ${o.title}.`; }, () => openChat(who));
+      }),
     },
     type_in_whatsapp_chat: {
       def: fn('type_in_whatsapp_chat', 'Put a message in the box of the WhatsApp chat that is open now, without sending; it replaces any draft unless append is true. Then the user is asked whether to send.',
         { text: { type: 'string', description: 'only the message itself, never the user\'s instructions' }, append: { type: 'boolean', description: 'true only when the user says to add to what is already typed' } }, ['text']),
-      run: logged('type_in_whatsapp_chat', async ({ text, append }) => `${await typeInChat(text, null, !!append)} ${await offerSend('')}`),
+      run: logged('type_in_whatsapp_chat', async ({ text, append }) => viaAX(async () => {
+        const t = await typeInChatAX(text, !!append);
+        return `Typed in the message box for ${t.title}${t.replaced ? ` (it replaced an earlier draft: "${t.replaced.slice(0, 60)}")` : ''}, not sent. ${await offerSendAX(t.title, t.draft)}`;
+      }, async () => `${await typeInChat(text, null, !!append)} ${await offerSend('')}`)),
     },
     whatsapp_type_to: {
       def: fn('whatsapp_type_to', 'Open the WhatsApp chat with a person (instant if already open) and put a message in its box WITHOUT sending: it replaces any draft unless append is true. Use for "send/type/write hi to Rishabh". Then the user is asked whether to send.',
         { name: { type: 'string' }, text: { type: 'string', description: 'only the message itself, never the user\'s instructions such as "tell him" or "also add"' }, append: { type: 'boolean', description: 'true only when the user says to add to what is already typed' } }, ['name', 'text']),
       run: logged('whatsapp_type_to', async ({ name, text, append }) => {
         const who = await resolveName(name);
-        const win = await waWindow().catch(() => null);
-        const opened = await openChat(who);
-        return `${opened} ${await typeInChat(text, win && await waWindow(), !!append)} ${await offerSend(who)}`;
+        return viaAX(async () => {
+          const o = await openChatAX(who);
+          const t = await typeInChatAX(text, !!append, o.title);
+          return `${o.already ? `The WhatsApp chat for ${o.title} is already open.` : `Opened the WhatsApp chat for ${o.title}.`} Typed in its message box${t.replaced ? ` (it replaced an earlier draft: "${t.replaced.slice(0, 60)}")` : ''}, not sent. ${await offerSendAX(t.title, t.draft)}`;
+        }, async () => {
+          const win = await waWindow().catch(() => null);
+          const opened = await openChat(who);
+          return `${opened} ${await typeInChat(text, win && await waWindow(), !!append)} ${await offerSend(who)}`;
+        });
+      }),
+    },
+    whatsapp_send: {
+      def: fn('whatsapp_send', 'Send the message that is already typed in the open WhatsApp chat. Never types anything; refuses an empty box; the user is asked to confirm and the reply names who it went to. Use for "send it" when a message was typed earlier.'),
+      run: logged('whatsapp_send', async () => {
+        await waFront();
+        const st = await waState();
+        if (!st.draft.trim()) throw new Error(`The message box for ${st.title || 'this chat'} is empty, so there is nothing to send.`);
+        return offerSendAX(st.title, st.draft, `Send "${st.draft.slice(0, 80)}" to ${st.title}?`);
       }),
     },
     type_text: {
@@ -414,4 +574,5 @@ end run`, label, confirmed ? 'yes' : 'no', RISKY_WORDS.join('|'));
 module.exports.keyScript = keyScript;
 module.exports.pageClickScript = pageClickScript;
 module.exports.chatTitle = chatTitle;
+module.exports.pickChat = pickChat;
 module.exports.titleMatches = titleMatches;

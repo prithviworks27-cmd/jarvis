@@ -128,8 +128,13 @@ const tools = {
     run: ({ question }) => describeScreen(question),
   },
   set_volume: {
-    def: fn('set_volume', 'Set system output volume, 0-100.', { level: { type: 'number' } }, ['level']),
-    run: async ({ level }) => {
+    def: fn('set_volume', 'Set the system output volume to a level 0-100, or change it by an amount (+12 = a bit louder, -12 = a bit quieter). Give level OR change.', { level: { type: 'number' }, change: { type: 'number' } }),
+    run: async ({ level, change }) => {
+      if (!Number.isFinite(Number(level))) {
+        if (!Number.isFinite(Number(change))) throw new Error('Say what level, or how much louder or quieter.');
+        // One script: read, adjust and set (two separate scripts cost twice the start-up time).
+        return `Volume set to ${await osa('on run argv\nset v to (output volume of (get volume settings)) + (item 1 of argv as integer) - 1000\nif v > 100 then set v to 100\nif v < 0 then set v to 0\nset volume output volume v\nreturn v\nend run', String(Math.round(Number(change)) + 1000))}.`; // +1000: osascript reads a leading minus as an option
+      }
       const n = Math.max(0, Math.min(100, Math.round(Number(level))));
       await osa('on run argv\nset volume output volume (item 1 of argv as integer)\nend run', String(n));
       return `Volume set to ${n}.`;
@@ -297,6 +302,10 @@ tools.web_search.run = async ({ query, browser: said }) => {
 };
 tools.web_search.def.function.description = 'ONLY to put a Google results page on the user\'s screen when they ask to see it (in the browser they are working in, or the one they name). It returns no results to you. To answer a question yourself use search_web, air_quality, weather, news or wikipedia.';
 
+// Internal checks for the fast paths (local.js). Never sent to the model.
+tools.__front_app = { hidden: true, def: fn('__front_app', 'internal'), run: () => osa('tell application "System Events" to get name of first application process whose frontmost is true') };
+tools.__music_open = { hidden: true, def: fn('__music_open', 'internal'), run: async () => ((await Promise.all(['Spotify', 'Music'].map((a) => run('pgrep', ['-x', a]).then(() => true, () => false)))).some(Boolean) ? 'yes' : 'no') };
+
 // One call for "what's my day": every part is fetched at once, and a part that fails is just left out.
 tools.daily_briefing = {
   readOnly: true,
@@ -324,10 +333,10 @@ const GROUPS = {
   system: /battery|charge|disk|storage|space|uptime|dark mode|light mode|timer|alarm|remind me in|minutes?\b|seconds?\b|calculat|percent|\bplus\b|\bminus\b|\btimes\b|divided|\d\s*[-+*/x%^]\s*\d|\d\s*%|how much is|square root|memory|ram\b/i,
 };
 const groupsFor = (text) => new Set(Object.keys(GROUPS).filter((g) => GROUPS[g].test(text)));
-const definitionsFor = (groups) => Object.values(tools).filter((t) => !t.group || groups.has(t.group)).map((t) => t.def);
+const definitionsFor = (groups) => Object.values(tools).filter((t) => !t.hidden && (!t.group || groups.has(t.group))).map((t) => t.def);
 const isReadOnly = (name) => !!tools[name]?.readOnly;
 
-const definitions = Object.values(tools).map((t) => t.def);
+const definitions = Object.values(tools).filter((t) => !t.hidden).map((t) => t.def);
 
 // Never throws: a failure becomes text the model can tell the user about.
 async function runTool(name, args) {
