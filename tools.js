@@ -263,6 +263,39 @@ const control = require('./control')({ run, osa, fn });
 for (const t of Object.values(control.tools)) t.group = 'control';
 Object.assign(tools, control.tools, require('./memory').tools(fn), require('./extras')({ run, osa, fn, confirm: control.confirm, events }));
 
+// Air quality. With a free WAQI token (https://aqicn.org/data-platform/token/, JARVIS_WAQI_TOKEN in .env) it reads real
+// monitoring stations, which is what people quote for Delhi. Without one it uses Open-Meteo's free satellite/model estimate,
+// which usually reads LOWER than the stations in heavily polluted cities, and says so.
+const AQI_BAND = (n) => (n <= 50 ? 'good' : n <= 100 ? 'moderate' : n <= 150 ? 'unhealthy for sensitive groups' : n <= 200 ? 'unhealthy' : n <= 300 ? 'very unhealthy' : 'hazardous');
+tools.air_quality = {
+  readOnly: true,
+  def: fn('air_quality', 'Get the real air quality (AQI, PM2.5) of a city. ALWAYS use this for any AQI, pollution or air question: never guess a number. Omit city for the default city.', { city: { type: 'string' } }),
+  run: async ({ city }) => {
+    const name = city || process.env.JARVIS_CITY;
+    if (!name) throw new Error('No city given and JARVIS_CITY is not set in .env.');
+    const token = process.env.JARVIS_WAQI_TOKEN;
+    if (token) {
+      try {
+        const j = await (await getJSON(`https://api.waqi.info/feed/${encodeURIComponent(name)}/?token=${encodeURIComponent(token)}`)).json();
+        if (j.status === 'ok' && Number.isFinite(Number(j.data?.aqi))) {
+          const d = j.data, n = Number(d.aqi);
+          return `${name} air quality from the monitoring station "${d.city?.name || name}": AQI ${n} (${AQI_BAND(n)}), main pollutant ${d.dominentpol || 'unknown'}${d.iaqi?.pm25 ? `, PM2.5 index ${d.iaqi.pm25.v}` : ''}. Reading time: ${d.time?.s || 'unknown'}. Scale: US EPA, up to 500.`;
+        }
+      } catch { /* fall through to the model estimate */ }
+    }
+    const geo = (await (await getJSON(`https://geocoding-api.open-meteo.com/v1/search?count=1&name=${encodeURIComponent(name)}`)).json()).results?.[0];
+    if (!geo) throw new Error(`Could not find a place called ${name}.`);
+    const c = (await (await getJSON(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${geo.latitude}&longitude=${geo.longitude}&timezone=auto&current=us_aqi,pm2_5,pm10`)).json()).current;
+    if (!Number.isFinite(c?.us_aqi)) throw new Error('No air quality data came back.');
+    return `${geo.name} air quality (a satellite and model ESTIMATE, not a ground station): US AQI ${c.us_aqi} (${AQI_BAND(c.us_aqi)}), PM2.5 ${c.pm2_5} µg/m³, PM10 ${c.pm10} µg/m³. Tell the user this is an estimate and that street-level monitors in polluted cities, Delhi especially, often read considerably higher${token ? '' : '; a free station-based source needs JARVIS_WAQI_TOKEN in .env'}.`;
+  },
+};
+tools.web_search.run = async ({ query }) => {
+  await run('open', ['https://www.google.com/search?q=' + encodeURIComponent(query)]);
+  return `Opened a Google results page for "${query}" on the user's screen. I have NOT read it, so I know nothing from it: never answer a question from this. For an answer use search_web, weather, air_quality, news or wikipedia.`;
+};
+tools.web_search.def.function.description = 'ONLY to put a Google results page on the user\'s screen when they ask to see it. It returns no results to you. To answer a question yourself use search_web, air_quality, weather, news or wikipedia.';
+
 // One call for "what's my day": every part is fetched at once, and a part that fails is just left out.
 tools.daily_briefing = {
   readOnly: true,

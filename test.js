@@ -227,6 +227,10 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   const core = T.definitionsFor(new Set()).map((d) => d.function.name);
   assert.ok(core.includes('weather') && core.includes('daily_briefing') && !core.includes('github_overview') && !core.includes('type_text'));
   assert.ok(JSON.stringify(T.definitionsFor(new Set())).length < JSON.stringify(T.definitions).length * 0.6, 'core tools are much smaller than all tools');
+  // The Google-tab tool must not look like it returned an answer (that is how Alfred once invented Delhi's AQI).
+  assert.match(T.definitions.find((d) => d.function.name === 'web_search').function.description, /returns no results to you/);
+  assert.ok(T.definitions.some((d) => d.function.name === 'air_quality'));
+  assert.match(await T.runTool('air_quality', {}), /^Error: No city given/);
   assert.match(await T.runTool('set_timer', { minutes: 10, label: 'tea' }), /Timer set: tea/);
   assert.match(await T.runTool('list_timers', {}), /tea: \d+ min/);
   assert.strictEqual(await T.runTool('cancel_timer', { label: 'tea' }), 'Cancelled 1 timer.');
