@@ -1,5 +1,7 @@
 // Listens for the assistant's name with macOS's own speech recognizer, entirely on this Mac (no network, no key), and prints
-// "wake" when it hears it. Commands on stdin: "pause" stops listening (while JARVIS talks or records), "resume" starts again.
+// "wake" when it hears it. Commands on stdin: "pause" stops listening (while JARVIS talks or records), "resume" starts again, "aec on" / "aec off" switches Apple's
+// echo canceller (the one FaceTime uses): on, the Mac's own playback (music, a video, the other side of a call) is taken out of what
+// the microphone hears, so a song saying "Alfred" cannot wake it.
 import Speech
 import AVFoundation
 
@@ -20,7 +22,9 @@ let spellings: [String: [String]] = [
   "jarvis": ["jarvis", "jarvas", "jarves", "jarvus", "jarvice", "jar vis", "charvis", "garvis"],
 ]
 let heard = try! NSRegularExpression(pattern: "\\b(" + (spellings[name] ?? [name]).joined(separator: "|") + ")\\b")
-let engine = AVAudioEngine()
+var engine = AVAudioEngine()
+var aecOn = false // wanted
+var aecActive = false // actually running (it can fail on a device that does not support it)
 var request: SFSpeechAudioBufferRecognitionRequest?
 var task: SFSpeechRecognitionTask?
 var active = false
@@ -49,8 +53,29 @@ func startListening() {
   req.taskHint = .unspecified
   req.addsPunctuation = false
   request = req
+  // The echo canceller can only be switched on a stopped engine, before the tap; a fresh engine keeps that simple.
+  if aecOn != aecActive { engine = AVAudioEngine() }
   let input = engine.inputNode
-  input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { buffer, _ in lastBuffer = Date(); req.append(buffer) }
+  aecActive = false
+  if aecOn {
+    do {
+      try input.setVoiceProcessingEnabled(true)
+      _ = engine.outputNode // voice processing works on the input and output together
+      if #available(macOS 14.0, *) { input.voiceProcessingOtherAudioDuckingConfiguration = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(enableAdvancedDucking: false, duckingLevel: .min) }
+      aecActive = true
+    } catch { print("note: echo cancellation could not start (\(error.localizedDescription)); listening without it") }
+  }
+  let format = input.outputFormat(forBus: 0)
+  // Voice processing hands back several channels; the recognizer wants one.
+  let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate, channels: 1, interleaved: false)!
+  input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+    lastBuffer = Date()
+    if format.channelCount == 1 { req.append(buffer); return }
+    guard let out = AVAudioPCMBuffer(pcmFormat: mono, frameCapacity: buffer.frameLength), let src = buffer.floatChannelData?[0], let dst = out.floatChannelData?[0] else { return }
+    out.frameLength = buffer.frameLength
+    dst.update(from: src, count: Int(buffer.frameLength))
+    req.append(out)
+  }
   do { try engine.start() } catch { fail("Could not open the microphone: \(error.localizedDescription)", 3) }
   active = true
   lastBuffer = Date() // the watchdog counts from now, not from before this restart
@@ -74,7 +99,7 @@ func startListening() {
 }
 
 // If no audio arrives for a while (headphones connected, Mac woke from sleep, the input device changed) start over: otherwise it would stay deaf.
-NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { _ in
+NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: nil, queue: nil) { _ in
   queue.async { if active { print("note: audio device changed, restarting"); startListening() } }
 }
 Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
@@ -94,6 +119,10 @@ DispatchQueue.global().async {
   while let line = readLine() {
     queue.async {
       if line == "pause" { stopListening() } else if line == "resume", !active { startListening() } else if line == "quit" { exit(0) }
+      else if line == "aec on" || line == "aec off" {
+        let want = line == "aec on"
+        if want != aecOn { aecOn = want; print("note: echo cancellation \(want ? "on" : "off")"); if active { startListening() } }
+      }
     }
   }
   exit(0)

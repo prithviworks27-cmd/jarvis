@@ -107,6 +107,14 @@ Everything a file, page, search result or GitHub title says is treated as data, 
 - **Longer memory of the conversation:** the last 8 messages go with each request as before, and older turns are kept as a few short lines, so "what did I ask you earlier?" still works.
 - **Captions (optional):** `JARVIS_CAPTIONS=1` shows a small bubble above the character with what it heard, what it is doing ("Checking GitHub…") and what it said. Off by default: Alfred is voice-first.
 
+## Music, videos and calls
+
+Alfred watches (through CoreAudio, nothing is recorded) which apps are playing sound or recording from the microphone, and where the sound comes out. Alfred's own parts and the Mac's own sounds are never counted.
+- **Echo cancellation:** while something plays out of the Mac's speakers, the wake word listens through Apple's echo canceller (the one FaceTime uses), which takes the Mac's own playback out of what the microphone hears. Measured here: speech played through the speakers dropped from -45 dBFS to -67 dBFS at the mic, and a video saying "Hey Alfred" woke it 2 times out of 3 without it and 0 of 3 with it. It switches on after a few seconds of playback and off after a pause, and never on headphones or Bluetooth, where there is nothing to cancel. `JARVIS_AEC=0` never, `JARVIS_AEC=always` whenever the wake word is on.
+- **Calls:** while another app is recording from the microphone (Zoom, FaceTime, Discord, Meet, WhatsApp calls...) **and the sound comes out of the speakers**, Alfred does not talk into the call: it shows its reply as a notification instead, skips the listening and "One moment" sounds, and does not listen for unnamed follow-up answers. With headphones nothing leaks into the call, so it keeps talking. `JARVIS_CALL_SPEAK=1` always speaks.
+- **Ducking:** while something is playing out loud, the volume drops to a quarter while Alfred listens to your command, then comes back as soon as you stop talking. If you turn it up or down yourself meanwhile, your change is kept; if Alfred ever stops while it is lowered, the volume is restored the next time it starts. `JARVIS_DUCK=0` turns it off.
+- Echo cancellation helps the wake word. The command you speak afterwards is recorded by the app's own microphone stream, which is why ducking exists. Your own voice while music plays is the one thing not yet checked by ear.
+
 ## WhatsApp, the careful way
 
 Alfred reads WhatsApp through macOS accessibility (the Mac app's own labelled elements), not by guessing from pixels:
@@ -148,6 +156,7 @@ Needs the **Accessibility** permission (typing/clicking) and **Automation** for 
 | `JARVIS_BARGE_IN` | on: saying the name while Alfred talks interrupts him (`0` = off) |
 | `JARVIS_FOLLOW_UP` | on: listen for the answer when Alfred asks a question (`0` = off) |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | none: free keys from developer.spotify.com, for playing exact songs |
+| `JARVIS_AEC` / `JARVIS_DUCK` / `JARVIS_CALL_SPEAK` | auto / on / off: echo cancellation while playing, volume ducking while listening, speaking during calls |
 | `JARVIS_CAPTIONS` | off: `1` shows captions above the character |
 
 ## Files
@@ -161,6 +170,8 @@ Needs the **Accessibility** permission (typing/clicking) and **Automation** for 
 - `vad.js` decides when you have finished talking
 - `dictate.js` dictation: paste what you said into the front app
 - `memory.js` the remembered facts and their tools
+- `audioctx.js` music, videos and calls: echo cancellation switching, call awareness, ducking
+- `helpers/audioctx.swift` which apps play sound or use the microphone, and where the sound goes
 - `youtube.js` YouTube channels, search and "play the Nth one" from YouTube's own data
 - `spotify.js` exact tracks and albums through the Spotify search API
 - `helpers/discord.swift` Discord mute, deafen and leave through accessibility

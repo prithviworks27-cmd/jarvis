@@ -246,6 +246,54 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
     assert.strictEqual(opened[2][0], 'https://www.youtube.com/watch?v=vid00000001');
     assert.match(await ytools.youtube_play_nth.run({ n: -1 }), /"Second video"/, 'last = the last one');
   }
+  // Around music and calls: Alfred's own parts are not "someone else"; echo cancellation switches on only while something plays
+  // out of speakers (after two polls, off after four); no talking into a call over speakers; the volume is put back only if untouched.
+  {
+    const A = require('./audioctx');
+    const own = 'output=speakers\nleaks=yes\ninput=com.apple.CoreSpeech,com.github.Electron.helper,local.jarvis.wake\nplaying=com.apple.CoreSpeech,com.github.Electron.helper';
+    assert.deepStrictEqual([A.classify(own).call, A.classify(own).media], [false, false], 'Alfred itself is not a call or media');
+    const call = A.classify('output=speakers\nleaks=yes\ninput=com.apple.CoreSpeech,us.zoom.xos\nplaying=us.zoom.xos');
+    assert.deepStrictEqual([call.call, call.media, call.callApps[0]], [true, true, 'us.zoom.xos']);
+    assert.strictEqual(A.classify('').leaks, false);
+    assert.strictEqual(A.speakNow(call, {}), false, 'a call over speakers: do not speak');
+    assert.strictEqual(A.speakNow({ ...call, leaks: false }, {}), true, 'headphones: nothing leaks into the call, so speak');
+    assert.strictEqual(A.speakNow(call, { JARVIS_CALL_SPEAK: '1' }), true);
+    assert.strictEqual(A.speakNow(A.classify(own), {}), true);
+    const frames = [];
+    const song = 'output=speakers\nleaks=yes\ninput=local.jarvis.wake\nplaying=com.spotify.client';
+    const phones = 'output=headphones\nleaks=no\ninput=local.jarvis.wake\nplaying=com.spotify.client';
+    const silent = 'output=speakers\nleaks=yes\ninput=local.jarvis.wake\nplaying=';
+    let next = silent;
+    const mon = A.monitor({ exec: async () => next });
+    const events = [];
+    mon.on('aec', (on) => events.push(on ? 'on' : 'off'));
+    next = song; await mon.tick();
+    assert.deepStrictEqual(events, [], 'one poll is not enough (a click or a notification sound)');
+    await mon.tick(); assert.deepStrictEqual(events, ['on']);
+    next = silent;
+    for (let i = 0; i < 3; i++) await mon.tick();
+    assert.deepStrictEqual(events, ['on'], 'a short pause between songs does not switch it off');
+    await mon.tick(); assert.deepStrictEqual(events, ['on', 'off']);
+    next = phones;
+    for (let i = 0; i < 4; i++) await mon.tick();
+    assert.deepStrictEqual(events, ['on', 'off'], 'headphones: nothing leaks, so no echo cancellation (it would only quieten other audio)');
+    // Ducking: lowers by a factor, restores only if the user left the volume alone, recovers after a crash.
+    const file = path.join(os.tmpdir(), `jarvis-duck-${process.pid}.json`);
+    let vol = 60;
+    const mk = () => A.ducker({ getVolume: async () => vol, setVolume: async (n) => { vol = Math.round(n); }, file: () => file });
+    let d = mk();
+    assert.strictEqual(await d.duck(), true); assert.strictEqual(vol, 15);
+    assert.strictEqual(await d.duck(), false, 'ducking twice does not lower it twice');
+    assert.strictEqual(await d.restore(), true); assert.strictEqual(vol, 60);
+    assert.strictEqual(fs.existsSync(file), false);
+    await d.duck(); vol = 40; // the user turned it up while Alfred was listening
+    assert.strictEqual(await d.restore(), false); assert.strictEqual(vol, 40, 'the user\'s own change is kept');
+    vol = 8; assert.strictEqual(await mk().duck(), false, 'already quiet: nothing to do');
+    vol = 80; d = mk(); await d.duck(); assert.strictEqual(vol, 20);
+    assert.strictEqual(await mk().recover(), true); assert.strictEqual(vol, 80, 'after a crash the saved volume comes back');
+    assert.strictEqual(await mk().recover(), false);
+    fs.rmSync(file, { force: true });
+  }
   // Spotify by exact name (fake Spotify web API) and play_music's fallback order (fake apps).
   {
     const sp = require('./spotify');
