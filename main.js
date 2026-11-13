@@ -9,6 +9,7 @@ const { transcribe } = require('./stt');
 const { ask, cancel } = require('./brain');
 const { events, browser } = require('./tools');
 const speech = require('./speak');
+const audioctx = require('./audioctx');
 const { cleanDictation, pasteText } = require('./dictate');
 
 try { process.loadEnvFile(path.join(__dirname, '.env')); } catch { /* no .env yet; handled in handleAudio */ }
@@ -86,11 +87,29 @@ function startWake() {
       }
     });
     execFile('open', ['-n', '-g', app, '--stdin', cmd, '--stdout', ev, '--stderr', err, '--args', assistantName().toLowerCase()]);
+    if (aecMode() === 'always' || (aecMode() === 'auto' && audio.aec())) setTimeout(() => wakeSend('aec on'), 4000);
   }).catch((e) => console.error(`${e.message} The wake word is off; hotkeys still work.`));
 }
 
+// ---- Around music, videos and calls (audioctx.js) ----
+// Echo cancellation: while something plays out of speakers the microphone hears, the wake helper uses Apple's echo canceller
+// (JARVIS_AEC=0 never, JARVIS_AEC=always whenever the wake word is on). Calls: while another app records from the microphone and the
+// sound comes out of speakers, Alfred shows its replies instead of speaking them (JARVIS_CALL_SPEAK=1 speaks anyway) and does not
+// listen for unnamed follow-ups. Ducking: while something plays, the volume drops while Alfred listens to a command (JARVIS_DUCK=0 off).
+const audio = audioctx.monitor();
+const ducker = audioctx.ducker();
+const wakeSend = (line) => { try { if (wakeCmd) fs.writeSync(wakeCmd, `${line}\n`); } catch { /* helper gone */ } };
+const aecMode = () => process.env.JARVIS_AEC || 'auto';
+audio.on('aec', (on) => { if (aecMode() === 'auto') { console.log(`${stamp()} [audio] ${on ? 'something is playing out loud: echo cancellation on' : 'quiet again: echo cancellation off'}`); wakeSend(`aec ${on ? 'on' : 'off'}`); } });
+audio.on('change', (now, was) => {
+  if (now.call !== was.call) console.log(`${stamp()} [audio] ${now.call ? `a call is on (${now.callApps.join(', ')})${now.leaks ? ': Alfred will not speak aloud' : ''}` : 'the call ended'}`);
+});
+const quiet = () => !audioctx.speakNow(audio.state); // a call is using the microphone and the sound comes out of the speakers
+const notify = (text) => execFile('osascript', ['-e', 'on run argv\ndisplay notification (item 1 of argv) with title "Alfred"\nend run', String(text).slice(0, 240)], () => {});
+const restoreVolume = () => ducker.restore().catch(() => {});
+
 // Short sounds say "I am listening" / "got it" when you are not looking at the screen. JARVIS_SOUNDS=0 turns them off.
-const cue = (name) => process.env.JARVIS_SOUNDS !== '0' && execFile('afplay', [`/System/Library/Sounds/${name}.aiff`], () => {});
+const cue = (name) => process.env.JARVIS_SOUNDS !== '0' && !quiet() && execFile('afplay', [`/System/Library/Sounds/${name}.aiff`], () => {});
 
 // Problems are spoken, not shown. Short, plain, and never a raw error message.
 const PROBLEMS = {
@@ -111,6 +130,7 @@ const oops = (e) => { console.error(e); send({ state: 'idle' }); return speech.s
 // Barge-in: while Alfred talks, the name detector keeps listening, so saying his name cuts him off and he listens to you.
 // Not while the reply itself contains the name (he would hear himself). JARVIS_BARGE_IN=0 turns it off.
 const bargeIn = () => process.env.JARVIS_BARGE_IN !== '0';
+let duckFailsafe;
 let busy = false; // between "started listening" and "idle again"
 let turn = 0; // bumped whenever the user starts talking: an older turn must not touch the screen or the voice any more
 
@@ -144,7 +164,7 @@ async function handleAudio(buf) {
     caption({ you });
     // Slow request (research, a briefing, WhatsApp): say "One moment" so silence does not feel like a hang. JARVIS_FILLER=0 turns it off.
     let filling = null;
-    if (process.env.JARVIS_FILLER !== '0') fillerTimer = setTimeout(() => { if (mine === turn) filling = speech.filler(); }, Number(process.env.JARVIS_FILLER_MS) || 2500);
+    if (process.env.JARVIS_FILLER !== '0') fillerTimer = setTimeout(() => { if (mine === turn) filling = quiet() ? null : speech.filler(); }, Number(process.env.JARVIS_FILLER_MS) || 2500);
     const jarvis = await ask(you, { onTool: (name) => mine === turn && TOOL_WORDS[name] && caption({ doing: TOOL_WORDS[name] }) });
     clearTimeout(fillerTimer);
     console.log(`timing: speech-to-text ${t1 - t0}ms, brain ${Date.now() - t1}ms`);
@@ -153,11 +173,12 @@ async function handleAudio(buf) {
     if (mine !== turn) return;
     if (!jarvis) return send({ state: 'idle' }); // an action that needs no words
     caption({ reply: jarvis });
+    if (quiet()) { notify(jarvis); send({ state: 'idle' }); return; } // a call is using the microphone: do not talk into it
     send({ state: 'speaking', bargeIn: bargeIn() && !new RegExp(`\\b${assistantName()}\\b`, 'i').test(jarvis) });
     await speech.speak(jarvis);
     if (mine !== turn) return; // cut off by the user: they are already talking
     // Alfred asked something ("Shall I go ahead?"): listen for the answer straight away, no name or hotkey needed. JARVIS_FOLLOW_UP=0 turns it off.
-    send({ state: 'idle', followUp: process.env.JARVIS_FOLLOW_UP !== '0' && /\?\s*$/.test(jarvis) });
+    send({ state: 'idle', followUp: process.env.JARVIS_FOLLOW_UP !== '0' && !audio.state.call && /\?\s*$/.test(jarvis) });
   } catch (e) {
     clearTimeout(fillerTimer);
     if (mine === turn) await oops(e);
@@ -169,6 +190,7 @@ async function announce(text, tries = 0) {
   if (busy) { if (tries < 120) setTimeout(() => announce(text, tries + 1), 1000); return; }
   const mine = turn;
   caption({ reply: text });
+  if (quiet()) { notify(text); return; } // a call is using the microphone: show it instead
   send({ state: 'speaking', bargeIn: bargeIn() });
   await speech.speak(text);
   if (mine === turn) send({ state: 'idle' });
@@ -217,18 +239,26 @@ if (gotLock) app.whenReady().then(async () => {
   startWake();
   warmOcr();
   speech.warm();
+  ducker.recover().catch(() => {}); // a crash while the volume was lowered must not leave it low
+  if (wakeEnabled() || process.env.JARVIS_DUCK !== '0') audio.start();
   if (process.env.JARVIS_FILLER !== '0') speech.warmFillers();
   events.on('announce', (text) => announce(text));
-  ipcMain.on('listen-start', () => { browser.noteFront(); turn++; busy = true; speech.stop(); cancel(); wakeListening(false); cue('Tink'); }); // talking again also stops any action in progress
-  ipcMain.on('listen-end', () => { busy = false; wakeListening(true); }); // recording ended with nothing said
+  ipcMain.on('listen-start', () => {
+    browser.noteFront(); turn++; busy = true; speech.stop(); cancel(); wakeListening(false); cue('Tink');
+    // Something is playing out loud: lower it while the command is spoken, so it is not part of what is heard.
+    if (process.env.JARVIS_DUCK !== '0' && audio.state.media && audio.state.leaks) setTimeout(() => ducker.duck().catch(() => {}), 250);
+    clearTimeout(duckFailsafe); duckFailsafe = setTimeout(restoreVolume, 25000);
+  }); // talking again also stops any action in progress
+  ipcMain.on('listen-end', () => { busy = false; wakeListening(true); restoreVolume(); }); // recording ended with nothing said
   ipcMain.on('problem', (_e, kind) => PROBLEMS[kind] && speech.speak(PROBLEMS[kind]));
   ipcMain.on('log', (_e, msg) => console.log(`${stamp()} [ui] ${String(msg).slice(0, 200)}`)); // the page's own notes for the log
-  ipcMain.on('audio', (_e, buf, mode) => { cue('Pop'); return mode === 'dictate' ? handleDictation(buf) : handleAudio(buf); });
+  ipcMain.on('audio', (_e, buf, mode) => { restoreVolume(); cue('Pop'); return mode === 'dictate' ? handleDictation(buf) : handleAudio(buf); });
   ipcMain.on('interactive', (_e, on) => win.setIgnoreMouseEvents(!on, { forward: true }));
   ipcMain.on('menu', () => Menu.buildFromTemplate([{ label: 'Quit JARVIS', click: () => app.quit() }]).popup({ window: win }));
 });
 
 app.on('will-quit', () => {
+  audio.stop(); ducker.restore().catch(() => {});
   globalShortcut.unregisterAll(); speech.stop(); speech.shutdown(); helper?.kill();
   try { fs.writeSync(wakeCmd, 'quit\n'); } catch { /* not running */ }
   wakeEvents?.destroy();
