@@ -57,6 +57,19 @@ const pageClickScript = (text, double, confirmed = false) => `(() => {
   return 'CLICKED ' + label(el).slice(0, 60);
 })()`;
 
+// The chat title from the OCR of WhatsApp's conversation header: the first line that is not a group's member list
+// ("Rishabh, Suryansh, You") or a status ("online", "typing…", "last seen …"). null when nothing could be read.
+const STATUS = /^(online|typing|last seen|click here|tap here|recording|business account)/i;
+const isMemberList = (line) => /,/.test(line) && (/(^|,\s*)you\s*$/i.test(line) || (line.match(/,/g) || []).length >= 2);
+function chatTitle(ocrText) {
+  const lines = String(ocrText || '').split('\n').map((l) => l.trim()).filter((l) => /[\p{L}\p{N}]/u.test(l));
+  if (!lines.length) return null;
+  return lines.find((l) => !isMemberList(l) && !STATUS.test(l)) ?? '';
+}
+const squash = (t) => String(t).toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+// "Rishabh" matches the titles "Rishabh" and "Rishabh Sharma", never "YT" or "Rishabh, Suryansh, You".
+const titleMatches = (title, name) => !!squash(name) && squash(title).includes(squash(name));
+
 // In a browser the macOS accessibility check cannot see web pages, so ask the page itself. If it cannot answer, do not type.
 const FIELD_JS = "(() => { const e = document.activeElement; return e ? (e.tagName === 'IFRAME' ? 'iframe' : (e.type || e.tagName)) : ''; })()";
 
@@ -137,9 +150,13 @@ module.exports = ({ run, osa, fn, paste = realPaste }) => {
       fs.unlink(file, () => {});
     }
   };
-  // Is this person's chat the open one? The header of the conversation shows its name. null = could not read the screen.
+  // Is this person's chat the open one? Only the chat's TITLE counts: a group shows its members ("Rishabh, Suryansh, You")
+  // under its title, and matching that line once made a group pass for Rishabh's own chat. null = could not read the screen.
   const headerHas = async (name, win) => {
-    try { return norm(await ocr(win.x + 0.5 * win.w, win.y, 0.5 * win.w, 0.07 * win.h)).includes(norm(name)); } catch { return null; }
+    let text;
+    try { text = await ocr(win.x + 0.5 * win.w, win.y, 0.5 * win.w, 0.07 * win.h); } catch { return null; }
+    const title = chatTitle(text);
+    return title === null ? null : titleMatches(title, name);
   };
   // "Risham" -> "Rishabh": keep the name if it is part of a known one, otherwise take the one that sounds closest.
   const resolveName = async (heard) => {
@@ -176,37 +193,44 @@ module.exports = ({ run, osa, fn, paste = realPaste }) => {
     };
     const list = snapOf(0.19, 0.16, 0.3, 0.55); // search results
     const pane = snapOf(0.52, 0.2, 0.45, 0.6); // the open conversation
-    const listBefore = await list().catch(() => null);
-    const paneBefore = await pane().catch(() => null);
 
-    await stillInWhatsApp(); // the user may have clicked elsewhere while we were measuring the window
-    // Cmd+A first: if an old search is still in the box, typing must replace it, not append to it.
-    await osa('on run argv\ntell application "System Events"\nkeystroke "f" using {command down}\ndelay 0.15\nkeystroke "a" using {command down}\ndelay 0.1\nkeystroke (item 1 of argv)\nend tell\nend run', name);
-    const resultsSettled = listBefore ? await settles(list, listBefore, 2500) : (await sleep(2000), null);
+    // Searching a person's name also lists the groups they are in, sometimes first. When the chat that opens has a different
+    // title, search again and take the next result. Without OCR a wrong chat cannot be told apart, so there is one try only.
+    const tries = already === null ? 1 : 4;
+    for (let attempt = 0; attempt < tries; attempt++) {
+      const listBefore = await list().catch(() => null);
+      const paneBefore = await pane().catch(() => null);
 
-    // Down moves into the result list, Return opens the highlighted row. On this WhatsApp the first Down only moves focus and
-    // highlights nothing, so keep pressing Down (max 3) until the list area visibly changes, i.e. the highlight ring appeared.
-    // One Return only: a blind second one could send a draft message if the chat had in fact opened.
-    await stillInWhatsApp();
-    for (let i = 0; i < 3; i++) {
-      await sysevents('key code 125');
-      await sleep(300);
-      if (!resultsSettled) { if (i === 1) break; continue; } // cannot watch the screen: two Downs, as observed
-      if ((await list().catch(() => resultsSettled)) !== resultsSettled) break;
-    }
-    await stillInWhatsApp(); // Return in the wrong app could submit a form or send a message
-    await sysevents('key code 36');
+      await stillInWhatsApp(); // the user may have clicked elsewhere while we were measuring the window
+      // Cmd+A first: if an old search is still in the box, typing must replace it, not append to it.
+      await osa('on run argv\ntell application "System Events"\nkeystroke "f" using {command down}\ndelay 0.15\nkeystroke "a" using {command down}\ndelay 0.1\nkeystroke (item 1 of argv)\nend tell\nend run', name);
+      const resultsSettled = listBefore ? await settles(list, listBefore, 2500) : (await sleep(2000), null);
 
-    if (already === null) { // OCR unavailable: the old heuristic
-      if (!paneBefore) { await sleep(800); return `Opened the WhatsApp chat for ${name}.`; }
-      if (await settles(pane, paneBefore, 2000)) return `Opened the WhatsApp chat for ${name}.`;
-    } else {
-      for (let i = 0; i < 6; i++) { // the header names the chat once it is open
+      // Down moves into the result list, Return opens the highlighted row. On this WhatsApp the first Down only moves focus and
+      // highlights nothing, so keep pressing Down (max 3) until the list area visibly changes, i.e. the highlight ring appeared.
+      // One Return only: a blind second one could send a draft message if the chat had in fact opened.
+      await stillInWhatsApp();
+      for (let i = 0; i < 3; i++) {
+        await sysevents('key code 125');
+        await sleep(300);
+        if (!resultsSettled) { if (i === 1) break; continue; } // cannot watch the screen: two Downs, as observed
+        if ((await list().catch(() => resultsSettled)) !== resultsSettled) break;
+      }
+      for (let i = 0; i < attempt; i++) { await sysevents('key code 125'); await sleep(200); } // skip the results that were wrong
+      await stillInWhatsApp(); // Return in the wrong app could submit a form or send a message
+      await sysevents('key code 36');
+
+      if (already === null) { // OCR unavailable: the old heuristic
+        if (!paneBefore) { await sleep(800); return `Opened the WhatsApp chat for ${name}.`; }
+        if (await settles(pane, paneBefore, 2000)) return `Opened the WhatsApp chat for ${name}.`;
+        break;
+      }
+      for (let i = 0; i < 6; i++) { // the header's title names the chat once it is open
         if (await headerHas(name, win)) return `Opened the WhatsApp chat for ${name}.`;
         await sleep(150);
       }
     }
-    throw new Error(`I searched WhatsApp for ${name} but the chat did not open (maybe no chat has that name). Do not try again; tell the user.`);
+    throw new Error(`I searched WhatsApp for ${name} but no chat titled ${name} opened (only other chats or groups came up), so I typed nothing. Do not try again; tell the user.`);
   }
 
   async function typeInChat(text, knownWindow) {
@@ -382,3 +406,5 @@ end run`, label, confirmed ? 'yes' : 'no', RISKY_WORDS.join('|'));
 };
 module.exports.keyScript = keyScript;
 module.exports.pageClickScript = pageClickScript;
+module.exports.chatTitle = chatTitle;
+module.exports.titleMatches = titleMatches;
