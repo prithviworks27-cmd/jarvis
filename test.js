@@ -26,6 +26,16 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   assert.match(await runTool('click_ui_element', { label: 'Send' }), /^CONFIRMATION REQUIRED/); // parked, not clicked
   const parked = require('./tools').takePending();
   assert.ok(parked && !require('./tools').takePending(), 'pending is single-use');
+  // WhatsApp: only the chat title counts. A group lists its members under the title; "Rishabh" in that list once made the
+  // group "YT" pass for Rishabh's chat, and the message was typed there (real OCR text from that header below).
+  const { chatTitle, titleMatches } = require('./control');
+  assert.strictEqual(chatTitle('YT\nRishabh, Suryansh, Suryansh, You'), 'YT');
+  assert.strictEqual(titleMatches(chatTitle('YT\nRishabh, Suryansh, Suryansh, You'), 'Rishabh'), false);
+  assert.strictEqual(titleMatches(chatTitle('Rishabh Sharma\nonline'), 'Rishabh'), true);
+  assert.strictEqual(titleMatches(chatTitle('Rishabh\nlast seen today at 1:02 AM'), 'rishabh'), true);
+  assert.strictEqual(chatTitle('Rishabh, You\nFamily'), 'Family', 'a two-person member list is not a title either');
+  assert.strictEqual(chatTitle('  \n'), null, 'nothing read: cannot tell');
+  assert.strictEqual(titleMatches('Rishabh', ''), false);
   const { pageClickScript } = require('./control');
   new Function(pageClickScript('Work "log" \\ - Nov', true)); // must be valid JS even for awkward labels
   assert.ok(pageClickScript('x', true).includes('dblclick') && !pageClickScript('x', false).includes('dblclick'));
