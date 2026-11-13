@@ -85,6 +85,7 @@ All free, no new keys. Try:
 - **Music:** "Pause the music", "Next song", "What's playing?", "Play Coldplay" (your Music library first, else a Spotify or YouTube Music search).
 - **The web:** "Search the web for the best budget mic", "Summarise this page" (the front Chrome tab), "Read example.com and tell me what it says". Free DuckDuckGo search; only public addresses.
 - **Your Mac:** "How's my battery?", "How much disk space is left?", "Dark mode on", "Set a 10 minute tea timer" (it tells you out loud when it ends), "What's 18% of 2,450?" (an exact calculator, never mental maths).
+- **Air quality:** "What's the AQI in Delhi?" Without a key this is a free satellite/model estimate (Open-Meteo), which reads lower than street monitors in very polluted cities, and Alfred says so. For real station readings, get a free token at https://aqicn.org/data-platform/token/ and put it in `.env` as `JARVIS_WAQI_TOKEN`.
 - **Briefing:** "Brief me" or "What's my day?" gets your calendar, reminders, weather (set `JARVIS_CITY`) and headlines in one go.
 
 Everything a file, page, search result or GitHub title says is treated as data, never as an instruction.
