@@ -5,7 +5,8 @@ const net = require('net');
 const { execFile, execFileSync, spawn } = require('child_process');
 const os = require('os');
 const { ensure, ensureApp } = require('./helpers');
-const { transcribe } = require('./stt');
+const { transcribe, setLocal } = require('./stt');
+const offline = require('./localstt')({ send: (line) => wakeSend(line) });
 const { ask, cancel } = require('./brain');
 const { events, browser } = require('./tools');
 const speech = require('./speak');
@@ -63,8 +64,11 @@ function wakeListening(on) {
   console.log(`${stamp()} [wake] ${on ? 'listening again' : 'paused (busy)'}`);
   try { fs.writeSync(wakeCmd, on ? 'resume\n' : 'pause\n'); } catch { /* helper gone */ }
 }
+// The helper also hears recorded commands offline (localstt.js), so it runs even with the wake word off, unless speech is cloud-only.
+const sttMode = () => process.env.JARVIS_STT || 'auto';
 function startWake() {
-  if (!wakeEnabled()) return;
+  if (!wakeEnabled() && sttMode() === 'cloud') return;
+  if (sttMode() !== 'cloud' && offline.available()) setLocal(offline.transcribe);
   ensureApp('wake', 'JarvisWake').then((app) => {
     wakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-wake-'));
     const [cmd, ev, err] = ['cmd', 'ev', 'err'].map((n) => path.join(wakeDir, n));
@@ -80,13 +84,17 @@ function startWake() {
       const lines = pending.split('\n');
       pending = lines.pop();
       for (const line of lines) {
+        if (offline.onLine(line)) continue; // an offline transcript coming back
         if (line === 'wake') { console.log(`${stamp()} [wake] name heard`); win.webContents.send('wake'); }
         else if (line.startsWith('note:')) console.log(`${stamp()} [wake] ${line.slice(5).trim()}`);
         else if (line.startsWith('heard:')) { if (process.env.JARVIS_WAKE_DEBUG === '1') console.log(`${stamp()} wake word heard: ${line.slice(6).trim()}`); }
         else if (line.startsWith('error:')) { console.error(line); speech.speak(PROBLEMS.wake); }
       }
     });
-    execFile('open', ['-n', '-g', app, '--stdin', cmd, '--stdout', ev, '--stderr', err, '--args', assistantName().toLowerCase()]);
+    execFile('open', ['-n', '-g', app, '--stdin', cmd, '--stdout', ev, '--stderr', err, '--args', assistantName().toLowerCase(), ...(wakeEnabled() ? [] : ['--stt-only'])]);
+    // Names the offline recogniser should expect: only your own JARVIS_VOCAB list. (Hinting it with every installed app made it
+    // double words in testing: "WhatsApp WhatsApp chat", and did not help with names.)
+    setTimeout(() => offline.setVocab((process.env.JARVIS_VOCAB || '').split(',')), 3000);
     if (aecMode() === 'always' || (aecMode() === 'auto' && audio.aec())) setTimeout(() => wakeSend('aec on'), 4000);
   }).catch((e) => console.error(`${e.message} The wake word is off; hotkeys still work.`));
 }

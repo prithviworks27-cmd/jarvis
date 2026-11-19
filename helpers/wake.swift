@@ -1,3 +1,5 @@
+// Also transcribes recorded commands on this Mac, fully offline: "stt <id> <locale> <wav path>" answers "stt:<id>:<base64 text>" (or
+// "stt-error:<id>:<base64 message>"), "vocab <base64 comma list>" sets names to expect; "--stt-only" skips listening for the name.
 // Listens for the assistant's name with macOS's own speech recognizer, entirely on this Mac (no network, no key), and prints
 // "wake" when it hears it. Commands on stdin: "pause" stops listening (while JARVIS talks or records), "resume" starts again, "aec on" / "aec off" switches Apple's
 // echo canceller (the one FaceTime uses): on, the Mac's own playback (music, a video, the other side of a call) is taken out of what
@@ -22,6 +24,35 @@ let spellings: [String: [String]] = [
   "jarvis": ["jarvis", "jarvas", "jarves", "jarvus", "jarvice", "jar vis", "charvis", "garvis"],
 ]
 let heard = try! NSRegularExpression(pattern: "\\b(" + (spellings[name] ?? [name]).joined(separator: "|") + ")\\b")
+let sttOnly = CommandLine.arguments.contains("--stt-only")
+var vocab: [String] = []
+var sttTasks: [SFSpeechRecognitionTask] = [] // kept alive until they finish
+func b64(_ s: String) -> String { Data(s.utf8).base64EncodedString() }
+
+// Transcribes a recorded file on-device. Only on-device: if this Mac cannot do the language offline, it says so rather than asking Apple's servers.
+func transcribeFile(id: String, locale: String, path: String) {
+  guard let rec = SFSpeechRecognizer(locale: Locale(identifier: locale)), rec.isAvailable else { print("stt-error:\(id):\(b64("No recognizer for \(locale)."))"); return }
+  guard rec.supportsOnDeviceRecognition else { print("stt-error:\(id):\(b64("\(locale) is not available offline on this Mac."))"); return }
+  let req = SFSpeechURLRecognitionRequest(url: URL(fileURLWithPath: path))
+  req.requiresOnDeviceRecognition = true
+  req.shouldReportPartialResults = false
+  req.addsPunctuation = true
+  req.contextualStrings = vocab
+  var finished = false
+  var task: SFSpeechRecognitionTask?
+  task = rec.recognitionTask(with: req) { result, error in
+    guard !finished else { return }
+    if let r = result, r.isFinal { finished = true; print("stt:\(id):\(b64(r.bestTranscription.formattedString))") }
+    else if let e = error as NSError? {
+      finished = true
+      // "No speech detected" is an empty transcript, not a failure.
+      if e.code == 1110 || e.code == 203 || e.localizedDescription.lowercased().contains("no speech") { print("stt:\(id):") } else { print("stt-error:\(id):\(b64(e.localizedDescription))") }
+    }
+    if finished { queue.async { sttTasks.removeAll { $0 === task } } }
+  }
+  if let t = task { queue.async { sttTasks.append(t) } }
+}
+
 var engine = AVAudioEngine()
 var aecOn = false // wanted
 var aecActive = false // actually running (it can fail on a device that does not support it)
@@ -108,6 +139,7 @@ Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
 
 SFSpeechRecognizer.requestAuthorization { status in
   guard status == .authorized else { fail("Speech Recognition permission is off. Turn it on in System Settings > Privacy & Security > Speech Recognition.", 4) }
+  if sttOnly { return } // transcribing files needs no microphone
   AVCaptureDevice.requestAccess(for: .audio) { ok in
     guard ok else { fail("Microphone permission is off.", 5) }
     queue.async { startListening() }
@@ -119,6 +151,11 @@ DispatchQueue.global().async {
   while let line = readLine() {
     queue.async {
       if line == "pause" { stopListening() } else if line == "resume", !active { startListening() } else if line == "quit" { exit(0) }
+      else if line.hasPrefix("stt ") {
+        let parts = line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true).map(String.init)
+        if parts.count == 4 { DispatchQueue.global().async { transcribeFile(id: parts[1], locale: parts[2], path: parts[3]) } }
+      }
+      else if line.hasPrefix("vocab "), let d = Data(base64Encoded: String(line.dropFirst(6))), let t = String(data: d, encoding: .utf8) { vocab = t.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.prefix(300).map { $0 } }
       else if line == "aec on" || line == "aec off" {
         let want = line == "aec on"
         if want != aecOn { aecOn = want; print("note: echo cancellation \(want ? "on" : "off")"); if active { startListening() } }

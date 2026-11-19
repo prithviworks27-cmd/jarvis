@@ -107,6 +107,16 @@ Everything a file, page, search result or GitHub title says is treated as data, 
 - **Longer memory of the conversation:** the last 8 messages go with each request as before, and older turns are kept as a few short lines, so "what did I ask you earlier?" still works.
 - **Captions (optional):** `JARVIS_CAPTIONS=1` shows a small bubble above the character with what it heard, what it is doing ("Checking GitHub…") and what it said. Off by default: Alfred is voice-first.
 
+## Hearing you offline
+
+Your voice is turned into text by Groq Whisper (the cloud) by default. Alfred can also do it **entirely on this Mac** with Apple's on-device recogniser, which runs inside the wake helper (so it needs no new permission and no download). It takes about 0.2 to 0.5 seconds per command in my tests, with no internet at all.
+- **`JARVIS_STT`:** `auto` (default) cloud first, and offline when the cloud is rate limited, unreachable or failing, or when there is no `GROQ_API_KEY`; `cloud` never uses it; `local` always does (nothing leaves the Mac, but see the limits). A bad request is never retried offline.
+- **English only, offline:** Apple's engine works offline for English (en-IN by default, `JARVIS_STT_LOCALE=en-US` to change), not for Hindi or Hinglish: those need the cloud (or a downloaded model such as Whisper, not built in). So `local` mode is for English speakers or for when you are offline.
+- **Names:** if you set `JARVIS_VOCAB` (names of contacts or apps), they are given to the recogniser as words to expect. Off by default: in testing, hinting it with every installed app made it double words ("WhatsApp WhatsApp chat") without helping.
+- **Needs `ffmpeg`** (free: `brew install ffmpeg`) to convert the recording; without it Alfred just keeps using the cloud.
+- **Speech Recognition permission:** the helper app ("Alfred Wake Word") needs System Settings > Privacy & Security > Speech Recognition switched on. If you rebuild it (its code changes), macOS may reset this and you must switch it on again; Alfred then says it cannot hear its name.
+- Accuracy is a little below Whisper's: in my test of 8 typical commands, 4 came back word for word. The rest were small slips: "lofi hip hop" as "five hip-hop", "Rishabh" as "Rushabh", "thirty percent" as "30%" (which Alfred understands). The test used computer voices, not yours.
+
 ## A local model as backup (free, offline)
 
 Alfred's thinking runs on Groq's free tier, which has rate limits. If you also run a local model, Alfred switches to it by itself whenever the cloud model is rate limited, too slow, unreachable (no internet) or failing, and does not wait out a rate limit when it has somewhere else to go. Nothing is sent anywhere when the local model answers.
@@ -158,6 +168,7 @@ Needs the **Accessibility** permission (typing/clicking) and **Automation** for 
 | `JARVIS_CITY` | none (used when you just say "the weather") |
 | `JARVIS_HOTKEY` | `Alt+Space` |
 | `JARVIS_MODEL` | `openai/gpt-oss-120b` |
+| `JARVIS_STT` / `JARVIS_STT_LOCALE` | auto / en-IN: speech-to-text engine (cloud, offline Apple recogniser, or both) |
 | `JARVIS_BRAIN` / `JARVIS_LOCAL_URL` / `JARVIS_LOCAL_MODEL` | auto / `http://127.0.0.1:11434/v1` / picked from the server: the local backup model |
 | `JARVIS_FALLBACK_MODEL` | `openai/gpt-oss-20b` (used when the main one is slow, busy or rate limited) |
 | `JARVIS_LLM_TIMEOUT_MS` | `9000`: how long to wait for the main model before asking the fallback |
@@ -184,6 +195,7 @@ Needs the **Accessibility** permission (typing/clicking) and **Automation** for 
 - `youtube.js` YouTube channels, search and "play the Nth one" from YouTube's own data
 - `spotify.js` exact tracks and albums through the Spotify search API
 - `helpers/discord.swift` Discord mute, deafen and leave through accessibility
+- `localstt.js` offline speech-to-text (ffmpeg plus the wake helper's on-device recogniser)
 - `local.js` commands answered without the model (open an app, volume, pause, scroll, time, send)
 - `browsers.js` Safari, Chrome, Brave and Edge: tabs, pages, opening links in the browser you are in
 - `helpers/wachat.swift` WhatsApp through accessibility: chat list, title, message box, send button

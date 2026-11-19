@@ -38,7 +38,8 @@ function ensureApp(name, appName) {
       const fail = () => { ready.delete(key); reject(new Error(`Could not build the ${name} helper (needs Xcode command line tools: xcode-select --install).`)); };
       execFile('swiftc', ['-swift-version', '5', '-O', src, '-o', exe], (err) => {
         if (err) return fail();
-        execFile('codesign', ['--force', '--sign', '-', app], (err2) => (err2 ? fail() : resolve(app)));
+        // Files in ~/Downloads can carry quarantine/Finder attributes, which codesign refuses: clear them first.
+        execFile('xattr', ['-cr', app], () => execFile('codesign', ['--force', '--sign', '-', app], (err2) => (err2 ? fail() : resolve(app))));
       });
     }));
   }

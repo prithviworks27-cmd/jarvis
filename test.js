@@ -369,6 +369,62 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
     assert.deepStrictEqual(await L.route('mute', dctx), { tool: 'set_mute', args: { muted: true } }, 'plain "mute" is still the Mac\'s volume');
     assert.strictEqual(await L.route('mute me', { apps: [], discordRunning: async () => false }), null, 'Discord not running: the model decides');
   }
+  // Speech-to-text: cloud first, offline when the cloud is rate limited / unreachable / failing; never for a bad request or JARVIS_STT=cloud;
+  // always for JARVIS_STT=local or when there is no key. Offline module: replies are matched to requests by id.
+  {
+    const freshStt = () => { delete require.cache[require.resolve('./stt')]; return require('./stt'); };
+    const L = require('./localstt');
+    // the offline module, with a fake helper that answers each "stt <id> <locale> <wav>" line, and a fake ffmpeg that just copies
+    const sent = [];
+    let helper;
+    const mod = L({ send: (l) => { sent.push(l); const m = l.match(/^stt (\S+) (\S+) (\S+)$/); if (m && helper) setTimeout(() => helper(m[1], mod), 5); }, ffmpeg: null });
+    await assert.rejects(mod.transcribe(Buffer.from('x')), /needs ffmpeg/, 'no ffmpeg: a clear message, not a hang');
+    assert.strictEqual(mod.available(), false);
+    assert.strictEqual(mod.onLine('wake'), false); assert.strictEqual(mod.onLine('note: hi'), false);
+    assert.strictEqual(mod.onLine('stt:unknownid:' + Buffer.from('x').toString('base64')), true, 'a reply nobody waits for is swallowed');
+    mod.setVocab(['Alfred', 'Rishabh', 'Alfred', ' ']);
+    assert.strictEqual(sent[0], 'vocab ' + Buffer.from('Alfred,Rishabh').toString('base64'), 'names are deduplicated and sent once');
+    // a real ffmpeg round trip with a real (tiny) recording, and replies matched by id
+    if (require('fs').existsSync('/opt/homebrew/bin/ffmpeg')) {
+      const wavSrc = path.join(os.tmpdir(), `jarvis-sttt-${process.pid}.wav`);
+      require('child_process').execFileSync('/opt/homebrew/bin/ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.3', wavSrc]);
+      const real = L({ send: (l) => { const m = l.match(/^stt (\S+) en-IN (\S+\.wav)$/); if (m) { assert.ok(require('fs').statSync(m[2]).size > 1000, 'a real 16 kHz wav was made'); setTimeout(() => real.onLine(`stt:${m[1]}:${Buffer.from('open safari ').toString('base64')}`), 5); } } });
+      assert.strictEqual(await real.transcribe(require('fs').readFileSync(wavSrc)), 'open safari');
+      const failing = L({ send: (l) => { const m = l.match(/^stt (\S+)/); if (m) setTimeout(() => failing.onLine(`stt-error:${m[1]}:${Buffer.from('en-IN is not available offline').toString('base64')}`), 5); } });
+      await assert.rejects(failing.transcribe(require('fs').readFileSync(wavSrc)), /not available offline/);
+      require('fs').rmSync(wavSrc, { force: true });
+    }
+    // routing
+    let cloudResult = 'rate';
+    const realF = global.fetch;
+    global.fetch = async () => {
+      if (cloudResult === 'rate') return { ok: false, status: 429, text: async () => 'rate limited' };
+      if (cloudResult === 'bad') return { ok: false, status: 400, text: async () => 'bad audio' };
+      if (cloudResult === 'down') throw new TypeError('fetch failed');
+      return { ok: true, status: 200, json: async () => ({ text: 'from the cloud', segments: [] }) };
+    };
+    const prevKey = process.env.GROQ_API_KEY;
+    try {
+      let stt = freshStt(); let localCalls = 0;
+      stt.setLocal(async () => { localCalls++; return 'open safari'; });
+      assert.strictEqual(await stt.transcribe(Buffer.from('a')), 'open safari', 'rate limited: heard offline'); assert.strictEqual(localCalls, 1);
+      cloudResult = 'down'; assert.strictEqual(await stt.transcribe(Buffer.from('a')), 'open safari', 'no network: heard offline');
+      cloudResult = 'ok'; localCalls = 0; assert.strictEqual(await stt.transcribe(Buffer.from('a')), 'from the cloud'); assert.strictEqual(localCalls, 0, 'cloud fine: offline untouched');
+      cloudResult = 'bad'; await assert.rejects(stt.transcribe(Buffer.from('a')), /Speech-to-text failed \(400\)/); assert.strictEqual(localCalls, 0, 'a bad request does not switch');
+      stt.setLocal(async () => { throw new Error('not available offline'); });
+      cloudResult = 'rate'; await assert.rejects(stt.transcribe(Buffer.from('a')), /Speech-to-text failed \(429\)/, 'offline fails too: the cloud error is reported');
+      stt.setLocal(async () => 'thank you'); // a phrase Whisper-like engines invent from silence is dropped
+      process.env.JARVIS_STT = 'local'; assert.strictEqual(await stt.transcribe(Buffer.from('a')), '', 'invented text from silence is dropped'); 
+      stt.setLocal(async () => 'open notes'); cloudResult = 'ok';
+      assert.strictEqual(await stt.transcribe(Buffer.from('a')), 'open notes', 'local mode never asks the cloud');
+      process.env.JARVIS_STT = 'cloud'; cloudResult = 'down'; await assert.rejects(stt.transcribe(Buffer.from('a')), /fetch failed/);
+      delete process.env.JARVIS_STT; delete process.env.GROQ_API_KEY;
+      assert.strictEqual(await stt.transcribe(Buffer.from('a')), 'open notes', 'no cloud key: offline');
+      stt = freshStt(); await assert.rejects(stt.transcribe(Buffer.from('a')), /Offline speech recognition is not available/);
+    } finally {
+      global.fetch = realF; delete process.env.JARVIS_STT; process.env.GROQ_API_KEY = prevKey || 'test-key';
+    }
+  }
   // The local fallback: used when the cloud model is rate limited, unreachable or failing; never for a bad request, never when
   // JARVIS_BRAIN=cloud; always for JARVIS_BRAIN=local; and a rate limit is not waited out when a local model can answer instead.
   {

@@ -9,8 +9,13 @@ const PRIMER_WORDS = new Set(words(PRIMER));
 // Four or more words, all of them from the hint: that is the hint coming back (Whisper often drops a few of its words).
 const isEcho = (t) => { const w = words(t); return w.length >= 4 && w.every((x) => PRIMER_WORDS.has(x)); };
 
+// Offline engine, set by main.js (localstt.js): English only. Returns the text ('' = nothing heard), or throws when unavailable.
+let local = null;
+const setLocal = (fn) => { local = fn; };
+const MODE = () => process.env.JARVIS_STT || 'auto'; // auto: cloud first, offline when the cloud fails | cloud | local
+
 // Groq-hosted Whisper. Takes a webm/opus Buffer, returns the transcript text ('' when nothing was really said).
-async function transcribe(buf) {
+async function cloud(buf) {
   const form = new FormData();
   form.append('file', new Blob([buf], { type: 'audio/webm' }), 'speech.webm');
   form.append('model', 'whisper-large-v3-turbo');
@@ -24,9 +29,36 @@ async function transcribe(buf) {
     method: 'POST',
     headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
     body: form,
+    signal: AbortSignal.timeout(10000), // a dead connection must not hang the whole command
   });
   if (!res.ok) throw new Error(`Speech-to-text failed (${res.status}): ${await res.text()}`);
   return clean(await res.json());
+}
+
+// The offline text goes through the same filter for made-up phrases.
+const viaLocal = async (buf) => clean({ text: await local(buf) });
+
+// Cloud first. Rate limited, unreachable or failing: the offline recogniser, if there is one. JARVIS_STT=local always uses it (also
+// when there is no GROQ_API_KEY), =cloud never does.
+async function transcribe(buf) {
+  const mode = MODE();
+  if (mode === 'local' || (mode === 'auto' && !process.env.GROQ_API_KEY)) {
+    if (!local) throw new Error('Offline speech recognition is not available.');
+    return viaLocal(buf);
+  }
+  try {
+    return await cloud(buf);
+  } catch (e) {
+    if (mode === 'cloud' || !local || !/fetch failed|ENOTFOUND|ECONN|EAI_AGAIN|network|timed out|aborted|TimeoutError|\((429|5\d\d)\)/i.test(`${e.name} ${e.message}`)) throw e;
+    try {
+      const text = await viaLocal(buf);
+      console.log('[stt] the cloud was unavailable: heard offline');
+      return text;
+    } catch (offline) {
+      console.error(`[stt] ${offline.message}`);
+      throw e;
+    }
+  }
 }
 
 // Drops segments Whisper itself doubts (probably no speech, low confidence), and anything that is just its own prompt coming back.
@@ -40,4 +72,4 @@ function clean({ segments = [], text = '' }) {
   return t;
 }
 
-module.exports = { transcribe, clean };
+module.exports = { transcribe, clean, setLocal };
