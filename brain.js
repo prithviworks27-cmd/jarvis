@@ -80,7 +80,7 @@ async function salvage(res, tools) {
   return { role: 'assistant', content: null, tool_calls: [{ id: `salvaged-${++salvaged}`, type: 'function', function: { name, arguments: '{}' } }] };
 }
 
-async function chat(messages, tools) {
+async function cloudChat(messages, tools) {
   let res = await request(MODEL, messages, tools, SLOW_MS);
   const rescued = await salvage(res, tools);
   if (rescued) return rescued;
@@ -90,12 +90,65 @@ async function chat(messages, tools) {
   if (res.status === 408 || res.status === 429 || res.status >= 500) res = await request(FALLBACK_MODEL, messages, tools);
   if (res.status === 429) {
     const wait = Number((await res.text()).match(/try again in ([\d.]+)s/)?.[1]);
-    if (wait && wait <= 15) { await sleep(wait * 1000 + 300); res = await request(MODEL, messages, tools); }
+    if (wait && wait <= 15 && (BRAIN() === 'cloud' || !(await localModel()))) { await sleep(wait * 1000 + 300); res = await request(MODEL, messages, tools); }
   }
   if (res.status === 408) throw new Error('The language model timed out.');
   if (res.status === 429) throw new Error('Groq free-tier rate limit hit. Give it about a minute, then ask again.');
   if (!res.ok) throw new Error(`LLM request failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
   return (await res.json()).choices[0].message;
+}
+// ---- The local fallback: any OpenAI-compatible server on this Mac (Ollama, llama.cpp, LM Studio, mlx_lm.server). Free and offline.
+// Used when the cloud model is rate limited, too slow, unreachable or failing; JARVIS_BRAIN=local always, =cloud never. ----
+const BRAIN = () => process.env.JARVIS_BRAIN || 'auto';
+const localUrl = () => (process.env.JARVIS_LOCAL_URL || 'http://127.0.0.1:11434/v1').replace(/\/$/, '');
+let localSeen = { at: 0, model: null };
+// The model to use, or null when no local server answers. Asked at most every 30 s (a refused connection costs nothing).
+async function localModel() {
+  if (Date.now() - localSeen.at < 30000) return localSeen.model;
+  let model = null;
+  try {
+    const res = await fetch(`${localUrl()}/models`, { signal: AbortSignal.timeout(1500) });
+    const ids = res.ok ? ((await res.json()).data || []).map((m) => m.id).filter((id) => !/embed/i.test(id)) : [];
+    const want = process.env.JARVIS_LOCAL_MODEL;
+    model = want ? (ids.find((id) => id === want || id.split(':')[0] === want) || null) : (ids.find((id) => /qwen2\.5|qwen3|llama3|mistral|gemma|phi|gpt-oss/i.test(id)) || ids[0] || null);
+  } catch { /* nothing listening */ }
+  localSeen = { at: Date.now(), model };
+  return model;
+}
+let localCalls = 0;
+async function localChat(messages, tools) {
+  const model = await localModel();
+  if (!model) return null;
+  const res = await fetch(`${localUrl()}/chat/completions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, messages, tools, temperature: 0.4, max_tokens: 700, stream: false }),
+    signal: AbortSignal.timeout(Number(process.env.JARVIS_LOCAL_TIMEOUT_MS) || 90000), // the first call also loads the model
+  });
+  if (!res.ok) throw new Error(`The local model failed (${res.status}): ${(await res.text()).slice(0, 160)}`);
+  const msg = (await res.json()).choices[0].message;
+  for (const c of msg.tool_calls || []) { // some servers send the arguments as an object, or no id
+    if (typeof c.function.arguments !== 'string') c.function.arguments = JSON.stringify(c.function.arguments || {});
+    c.id ||= `local-${++localCalls}`;
+  }
+  return msg;
+}
+
+// What the loop calls. Cloud first; on a rate limit, a timeout, no network or a server error, the local model if there is one.
+async function chat(messages, tools) {
+  if (BRAIN() === 'local' || (BRAIN() === 'auto' && !process.env.GROQ_API_KEY && await localModel())) { // no cloud key: local only
+    const msg = await localChat(messages, tools);
+    if (!msg) throw new Error(`No local model answered at ${localUrl()}. Start one (for example Ollama) or set JARVIS_BRAIN=auto.`);
+    return msg;
+  }
+  try {
+    return await cloudChat(messages, tools);
+  } catch (e) {
+    if (BRAIN() === 'cloud' || !/rate limit|timed out|fetch failed|ENOTFOUND|ECONN|network|EAI_AGAIN|LLM request failed \(5/i.test(e.message)) throw e;
+    const msg = await localChat(messages, tools).catch((err) => { console.error(`[brain] ${err.message}`); return null; });
+    if (!msg) throw e;
+    console.log('[brain] the cloud model was unavailable: answered by the local model');
+    return msg;
+  }
 }
 
 // The model sometimes writes its answer twice in a row ("Good morning, sir. ...Good morning, sir. ..."): keep the first one.

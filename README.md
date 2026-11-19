@@ -107,6 +107,14 @@ Everything a file, page, search result or GitHub title says is treated as data, 
 - **Longer memory of the conversation:** the last 8 messages go with each request as before, and older turns are kept as a few short lines, so "what did I ask you earlier?" still works.
 - **Captions (optional):** `JARVIS_CAPTIONS=1` shows a small bubble above the character with what it heard, what it is doing ("Checking GitHub…") and what it said. Off by default: Alfred is voice-first.
 
+## A local model as backup (free, offline)
+
+Alfred's thinking runs on Groq's free tier, which has rate limits. If you also run a local model, Alfred switches to it by itself whenever the cloud model is rate limited, too slow, unreachable (no internet) or failing, and does not wait out a rate limit when it has somewhere else to go. Nothing is sent anywhere when the local model answers.
+- **Any OpenAI-compatible local server works:** Ollama (default, `http://127.0.0.1:11434/v1`), llama.cpp's `llama-server`, LM Studio, `mlx_lm.server`. Set `JARVIS_LOCAL_URL` for a different address, and `JARVIS_LOCAL_MODEL` to choose a model (otherwise it picks a chat model from what the server lists, never an embedding model).
+- **Setup with Ollama** (free and open source): install it from ollama.com, run `ollama pull qwen2.5:7b` (4.7 GB; `qwen2.5:3b` is about 2 GB and faster but a weaker tool user) and keep `ollama serve` running. On a 16 GB Mac the 7B model is a good fit.
+- **`JARVIS_BRAIN`:** `auto` (default) cloud first, local as backup; `cloud` never uses the local model; `local` always does, and it is also used when there is no `GROQ_API_KEY`. `JARVIS_LOCAL_TIMEOUT_MS` (90000) allows for the first request loading the model.
+- **Not covered yet:** speech-to-text (Groq Whisper) and "look at my screen" (Groq vision) still need the internet, so a fully offline Alfred still needs local speech recognition. Replies from a small local model are plainer and its Hindi is weaker.
+
 ## Music, videos and calls
 
 Alfred watches (through CoreAudio, nothing is recorded) which apps are playing sound or recording from the microphone, and where the sound comes out. Alfred's own parts and the Mac's own sounds are never counted.
@@ -150,6 +158,7 @@ Needs the **Accessibility** permission (typing/clicking) and **Automation** for 
 | `JARVIS_CITY` | none (used when you just say "the weather") |
 | `JARVIS_HOTKEY` | `Alt+Space` |
 | `JARVIS_MODEL` | `openai/gpt-oss-120b` |
+| `JARVIS_BRAIN` / `JARVIS_LOCAL_URL` / `JARVIS_LOCAL_MODEL` | auto / `http://127.0.0.1:11434/v1` / picked from the server: the local backup model |
 | `JARVIS_FALLBACK_MODEL` | `openai/gpt-oss-20b` (used when the main one is slow, busy or rate limited) |
 | `JARVIS_LLM_TIMEOUT_MS` | `9000`: how long to wait for the main model before asking the fallback |
 | `JARVIS_FILLER` / `JARVIS_FILLER_MS` | on / `2500`: say "One moment" when a request takes longer than this |

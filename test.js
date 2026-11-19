@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 process.env.JARVIS_MEMORY_FILE = path.join(os.tmpdir(), `jarvis-test-memory-${process.pid}.json`); // never touch the real memory
+process.env.GROQ_API_KEY = 'test-key'; // like a real setup: without a key Alfred would route to a local model
 process.env.JARVIS_ACTION_LOG = path.join(os.tmpdir(), `jarvis-test-actions-${process.pid}.log`); // nor the real action log
 const { definitions, runTool } = require('./tools');
 
@@ -367,6 +368,72 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
     assert.deepStrictEqual(await L.route('leave the call', dctx), { tool: 'discord_voice', args: { action: 'leave' } });
     assert.deepStrictEqual(await L.route('mute', dctx), { tool: 'set_mute', args: { muted: true } }, 'plain "mute" is still the Mac\'s volume');
     assert.strictEqual(await L.route('mute me', { apps: [], discordRunning: async () => false }), null, 'Discord not running: the model decides');
+  }
+  // The local fallback: used when the cloud model is rate limited, unreachable or failing; never for a bad request, never when
+  // JARVIS_BRAIN=cloud; always for JARVIS_BRAIN=local; and a rate limit is not waited out when a local model can answer instead.
+  {
+    const fresh = () => { for (const m of ['./brain', './tools', './memory', './local']) delete require.cache[require.resolve(m)]; return require('./brain'); };
+    const LOCAL = 'http://127.0.0.1:9/v1';
+    process.env.JARVIS_LOCAL_URL = LOCAL;
+    let cloud = 'rate', localUp = true, localSays;
+    const seenUrls = [];
+    global.fetch = async (url, o) => {
+      seenUrls.push(String(url));
+      if (String(url).startsWith(LOCAL)) {
+        if (!localUp) throw new TypeError('fetch failed');
+        if (url.endsWith('/models')) return { ok: true, status: 200, json: async () => ({ data: [{ id: 'nomic-embed-text' }, { id: 'qwen2.5:7b' }] }) };
+        const body = JSON.parse(o.body);
+        assert.strictEqual(body.model, 'qwen2.5:7b', 'an embedding model is never picked');
+        return { ok: true, status: 200, json: async () => ({ choices: [{ message: localSays }] }) };
+      }
+      if (cloud === 'rate') return { status: 429, ok: false, text: async () => 'Rate limit reached. Please try again in 9s.', clone() { return this; } };
+      if (cloud === 'bad') return { status: 400, ok: false, text: async () => '{"error":{"message":"bad request"}}', clone() { return this; } };
+      if (cloud === 'offline') throw new TypeError('fetch failed');
+      return { status: 200, ok: true, json: async () => ({ choices: [{ message: { role: 'assistant', content: 'From the cloud, sir.' } }] }) };
+    };
+    const used = (n) => seenUrls.filter((u) => (n === 'local' ? u.startsWith(LOCAL) : !u.startsWith(LOCAL))).length;
+    try {
+      localSays = { role: 'assistant', content: 'From the local model, sir.' };
+      let b4 = fresh();
+      const t0 = Date.now();
+      assert.strictEqual(await b4.ask('tell me something'), 'From the local model, sir.', 'both cloud models limited: the local one answers');
+      assert.ok(Date.now() - t0 < 3000, 'the rate limit was not waited out');
+      cloud = 'offline'; b4 = fresh();
+      assert.strictEqual(await b4.ask('tell me more'), 'From the local model, sir.', 'no network: the local model answers');
+      // Tool calls from local servers: object arguments and a missing id are repaired, and the tool really runs.
+      localSays = { role: 'assistant', content: null, tool_calls: [{ function: { name: 'set_timer', arguments: { minutes: 0 } } }] };
+      b4 = fresh();
+      localSays = [localSays, { role: 'assistant', content: 'Done, sir.' }];
+      const queue = localSays; localSays = undefined;
+      const origFetch = global.fetch;
+      global.fetch = async (u, o) => { if (String(u).startsWith(LOCAL) && !String(u).endsWith('/models')) { localSays = queue.shift(); } return origFetch(u, o); };
+      assert.strictEqual(await b4.ask('start a timer please'), 'Done, sir.');
+      global.fetch = origFetch;
+      // The cloud is fine: the local model is not touched.
+      cloud = 'ok'; seenUrls.length = 0; b4 = fresh();
+      assert.strictEqual(await b4.ask('hello there'), 'From the cloud, sir.');
+      assert.strictEqual(used('local'), 0);
+      // A bad request is not a reason to switch.
+      cloud = 'bad'; b4 = fresh();
+      await assert.rejects(b4.ask('hmm'), /LLM request failed \(400\)/);
+      // No local server: the original cloud error is what the user hears about.
+      cloud = 'rate'; localUp = false; b4 = fresh();
+      await assert.rejects(b4.ask('anything'), /rate limit/i);
+      // JARVIS_BRAIN: cloud never uses local, local never uses the cloud.
+      localUp = true; localSays = { role: 'assistant', content: 'Local only, sir.' };
+      delete process.env.GROQ_API_KEY; cloud = 'ok'; b4 = fresh(); seenUrls.length = 0;
+      assert.strictEqual(await b4.ask('no key at all'), 'Local only, sir.', 'no cloud key: local model'); assert.strictEqual(used('cloud'), 0);
+      process.env.GROQ_API_KEY = 'test-key'; cloud = 'rate';
+      process.env.JARVIS_BRAIN = 'cloud'; b4 = fresh(); seenUrls.length = 0;
+      await assert.rejects(b4.ask('cloud only'), /rate limit/i); assert.strictEqual(used('local'), 0);
+      process.env.JARVIS_BRAIN = 'local'; b4 = fresh(); seenUrls.length = 0; cloud = 'ok';
+      assert.strictEqual(await b4.ask('local only'), 'Local only, sir.'); assert.strictEqual(used('cloud'), 0);
+      localUp = false; b4 = fresh();
+      await assert.rejects(b4.ask('local only again'), /No local model answered/);
+    } finally {
+      global.fetch = realFetch;
+      delete process.env.JARVIS_BRAIN; delete process.env.JARVIS_LOCAL_URL;
+    }
   }
   // A browser argument the user never spoke is dropped before the tool runs (the model fills it in "to be helpful").
   {
