@@ -275,6 +275,12 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
     for (let i = 0; i < 3; i++) await mon.tick();
     assert.deepStrictEqual(events, ['on'], 'a short pause between songs does not switch it off');
     await mon.tick(); assert.deepStrictEqual(events, ['on', 'off']);
+    // A call over speakers must never switch it on: it would silence the call's own microphone.
+    const callAndSong = 'output=speakers\nleaks=yes\ninput=us.zoom.xos\nplaying=us.zoom.xos';
+    const mon2 = A.monitor({ exec: async () => callAndSong }); const ev2 = [];
+    mon2.on('aec', (on) => ev2.push(on));
+    for (let i = 0; i < 4; i++) await mon2.tick();
+    assert.deepStrictEqual(ev2, [], 'no echo cancellation during a call');
     next = phones;
     for (let i = 0; i < 4; i++) await mon.tick();
     assert.deepStrictEqual(events, ['on', 'off'], 'headphones: nothing leaks, so no echo cancellation (it would only quieten other audio)');

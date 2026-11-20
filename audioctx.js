@@ -1,5 +1,5 @@
 // Knows what the Mac's audio is doing, so Alfred can behave around music, videos and calls:
-//  - echo cancellation for the wake word is switched on only while something plays out of speakers the microphone can hear;
+//  - echo cancellation for the wake word (opt-in, JARVIS_AEC=auto) is switched on only while something plays out of speakers the microphone can hear;
 //  - while another app is recording from the microphone (a call), Alfred does not speak into it and does not listen for unnamed
 //    follow-ups;
 //  - while something plays, the volume is lowered for a moment while Alfred listens to a command, then put back.
@@ -37,7 +37,8 @@ function monitor({ exec = run, interval = 3000 } = {}) {
     const next = classify(await exec([]));
     const prev = bus.state;
     bus.state = next;
-    const wanted = next.leaks && (next.media || next.call);
+    // Never during a call: while the echo canceller runs it silences every other app's microphone, including the call's.
+    const wanted = next.leaks && next.media && !next.call;
     want = wanted ? want + 1 : 0; idle = wanted ? 0 : idle + 1;
     if (!aec && want >= 2) { aec = true; bus.emit('aec', true); }
     else if (aec && idle >= 4) { aec = false; bus.emit('aec', false); }

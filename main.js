@@ -107,7 +107,9 @@ function startWake() {
 const audio = audioctx.monitor();
 const ducker = audioctx.ducker();
 const wakeSend = (line) => { try { if (wakeCmd) fs.writeSync(wakeCmd, `${line}\n`); } catch { /* helper gone */ } };
-const aecMode = () => process.env.JARVIS_AEC || 'auto';
+// Off by default: while it runs, Apple's echo canceller silences every OTHER app's microphone (measured: -22 dBFS down to -69), including
+// Alfred's own recording of your command. So it is also switched off while a command is recorded.
+const aecMode = () => process.env.JARVIS_AEC || 'off';
 audio.on('aec', (on) => { if (aecMode() === 'auto') { console.log(`${stamp()} [audio] ${on ? 'something is playing out loud: echo cancellation on' : 'quiet again: echo cancellation off'}`); wakeSend(`aec ${on ? 'on' : 'off'}`); } });
 audio.on('change', (now, was) => {
   if (now.call !== was.call) console.log(`${stamp()} [audio] ${now.call ? `a call is on (${now.callApps.join(', ')})${now.leaks ? ': Alfred will not speak aloud' : ''}` : 'the call ended'}`);
@@ -115,6 +117,7 @@ audio.on('change', (now, was) => {
 const quiet = () => !audioctx.speakNow(audio.state); // a call is using the microphone and the sound comes out of the speakers
 const notify = (text) => execFile('osascript', ['-e', 'on run argv\ndisplay notification (item 1 of argv) with title "Alfred"\nend run', String(text).slice(0, 240)], () => {});
 const restoreVolume = () => ducker.restore().catch(() => {});
+const resumeAec = () => { if (aecMode() === 'always' || (aecMode() === 'auto' && audio.aec())) wakeSend('aec on'); }; // after a recording, if it is wanted again
 
 // Short sounds say "I am listening" / "got it" when you are not looking at the screen. JARVIS_SOUNDS=0 turns them off.
 const cue = (name) => process.env.JARVIS_SOUNDS !== '0' && !quiet() && execFile('afplay', [`/System/Library/Sounds/${name}.aiff`], () => {});
@@ -256,11 +259,12 @@ if (gotLock) app.whenReady().then(async () => {
     // Something is playing out loud: lower it while the command is spoken, so it is not part of what is heard.
     if (process.env.JARVIS_DUCK !== '0' && audio.state.media && audio.state.leaks) setTimeout(() => ducker.duck().catch(() => {}), 250);
     clearTimeout(duckFailsafe); duckFailsafe = setTimeout(restoreVolume, 25000);
+    if (aecMode() !== 'off') wakeSend('aec off'); // the recording needs the microphone untouched
   }); // talking again also stops any action in progress
-  ipcMain.on('listen-end', () => { busy = false; wakeListening(true); restoreVolume(); }); // recording ended with nothing said
+  ipcMain.on('listen-end', () => { busy = false; wakeListening(true); restoreVolume(); resumeAec(); }); // recording ended with nothing said
   ipcMain.on('problem', (_e, kind) => PROBLEMS[kind] && speech.speak(PROBLEMS[kind]));
   ipcMain.on('log', (_e, msg) => console.log(`${stamp()} [ui] ${String(msg).slice(0, 200)}`)); // the page's own notes for the log
-  ipcMain.on('audio', (_e, buf, mode) => { restoreVolume(); cue('Pop'); return mode === 'dictate' ? handleDictation(buf) : handleAudio(buf); });
+  ipcMain.on('audio', (_e, buf, mode) => { restoreVolume(); setTimeout(resumeAec, 1500); cue('Pop'); return mode === 'dictate' ? handleDictation(buf) : handleAudio(buf); });
   ipcMain.on('interactive', (_e, on) => win.setIgnoreMouseEvents(!on, { forward: true }));
   ipcMain.on('menu', () => Menu.buildFromTemplate([{ label: 'Quit JARVIS', click: () => app.quit() }]).popup({ window: win }));
 });
