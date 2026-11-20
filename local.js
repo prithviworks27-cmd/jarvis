@@ -28,7 +28,7 @@ const exactApp = (spoken, apps) => {
 
 // "Alfred, please open Spotify." -> "open spotify"
 const normalise = (text) => String(text).toLowerCase()
-  .replace(/^[\s,.!?-]*(?:hey |hi |ok |okay )?(?:alfred|alfie|jarvis)[\s,.!?:-]*/i, '')
+  .replace(new RegExp(`^[\\s,.!?-]*(?:hey |hi |ok |okay )?(?:alfred|alfie|jarvis|${(process.env.JARVIS_NAME || '').replace(/[^\p{L}\p{N}]/gu, '') || 'alfred'})[\\s,.!?:-]*`, 'iu'), '')
   .replace(/^(?:please|can you|could you|will you|kindly)\s+/, '').replace(/\s+(?:please|now|for me|sir)$/, '')
   .replace(/[.!?,\s]+$/, '').replace(/\s+/g, ' ').trim();
 

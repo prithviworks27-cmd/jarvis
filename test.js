@@ -548,6 +548,12 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
     assert.deepStrictEqual(await R('play the second video', yctx), { tool: 'youtube_play_nth', args: { n: 2 } });
     assert.deepStrictEqual(await R('open the 3rd one', yctx), { tool: 'youtube_play_nth', args: { n: 3 } });
     assert.deepStrictEqual(await R('click on the last video', yctx), { tool: 'youtube_play_nth', args: { n: -1 } });
+    // The assistant's own name (JARVIS_NAME) is stripped from the front of a command, whatever it is.
+    process.env.JARVIS_NAME = 'Bash';
+    assert.deepStrictEqual(await R('Hey Bash, please open Spotify.'), { tool: 'open_app', args: { name: 'Spotify' } });
+    assert.deepStrictEqual(await R('bash volume up'), { tool: 'set_volume', args: { change: 12 } });
+    assert.strictEqual(await R('open bash'), null, 'the name later in a sentence is not removed');
+    delete process.env.JARVIS_NAME;
     assert.strictEqual(await R('x'.repeat(80)), null);
     assert.strictEqual(await R('tell me about volume'), null);
     // In the brain: a fast-path command makes no model request at all, and a failure is reported, never retried through the model.
