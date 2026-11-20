@@ -130,6 +130,9 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
     r = await runWith(c, 'type_in_whatsapp_chat', { text: 'hello' });
     assert.match(r, /replaced an earlier draft/, 'a replaced draft is mentioned');
     assert.strictEqual(wa.sent.length, 0, 'typing never sends');
+    await new Promise((res) => setTimeout(res, 50)); // the log is written without waiting
+    const logText = fs.readFileSync(process.env.JARVIS_ACTION_LOG, 'utf8');
+    assert.ok(/type_in_whatsapp_chat/.test(logText) && !/please send the details|how are you|hello/.test(logText), 'typed text, even a replaced draft quoted in the reply, never reaches the log');
 
     // Yes: sends once, with the real send button, and checks the box emptied.
     assert.strictEqual(await c.takePending().run(), 'Sent to Rishabh.');
@@ -163,6 +166,9 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
     r = await runWith(c, 'whatsapp_type_to', { name: 'Maa', text: 'call me' });
     assert.match(r, /Opened the WhatsApp chat for Maa[\s\S]*Shall I send it/);
     assert.strictEqual(wa.draft, 'call me');
+    await new Promise((res) => setTimeout(res, 50));
+    const typedLine = fs.readFileSync(process.env.JARVIS_ACTION_LOG, 'utf8').split('\n').find((l) => l.includes('whatsapp_type_to'));
+    assert.ok(typedLine.includes('"name":"Maa"') && !typedLine.includes('call me'), 'the chat asked for is logged, the text is not');
     c.takePending();
     wa.draft = '';
     assert.match(await runWith(c, 'whatsapp_type_to', { name: 'Nobody Atall', text: 'hi' }), /no chat with that name came up/);
