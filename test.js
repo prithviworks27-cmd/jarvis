@@ -234,18 +234,68 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
     // The tools, with fake pages and a fake browser: nothing real is opened.
     const opened = [];
     const fakeFetch = async (url) => ({ ok: true, status: 200, text: async () => page(/results/.test(url) ? (url.includes('sp=') ? { c: { channelRenderer: { channelId: 'UCchannel0001', title: { simpleText: 'David Dobrik' }, subscriberCountText: { simpleText: '@DavidDobrik' }, videoCountText: { simpleText: '17.2M subscribers' } } } } : search) : chanPage) });
-    const ytools = yt({ fn: (name) => ({ function: { name } }), browser: { current: async () => 'Safari', openIn: async (u, b) => opened.push([u, b]) }, fetchImpl: fakeFetch });
-    await assert.rejects(ytools.youtube_play_nth.run({ n: 1 }), /no YouTube list/);
+    const ytools = yt({ fn: (name) => ({ function: { name } }), browser: { current: async () => 'Safari', openIn: async (u, b) => opened.push([u, b]), pageUrl: async () => '', navigate: async () => { throw new Error('not used off YouTube'); } }, fetchImpl: fakeFetch, screen: async () => [] });
+    await assert.rejects(ytools.youtube_play_nth.run({ n: 1 }), /no YouTube page in front/);
     assert.strictEqual(await ytools.__youtube_list.run(), 'no');
     assert.match(await ytools.youtube_channel.run({ name: 'david dobrik' }), /Opened David Dobrik \(@DavidDobrik, 17\.2M subscribers\) on the videos tab in Safari\. Newest video: Newest/);
     assert.deepStrictEqual(opened[0], ['https://www.youtube.com/channel/UCchannel0001/videos', 'Safari']);
     assert.strictEqual(await ytools.__youtube_list.run(), 'yes');
-    assert.match(await ytools.youtube_play_nth.run({ n: 1 }), /Playing number 1 from David Dobrik: "Newest"/);
+    assert.match(await ytools.youtube_play_nth.run({ n: 1 }), /Playing video number 1 from David Dobrik \(YouTube's public order[^)]*\): "Newest"/);
     assert.strictEqual(opened[1][0], 'https://www.youtube.com/watch?v=newest00001');
-    await assert.rejects(ytools.youtube_play_nth.run({ n: 5 }), /only have 1 videos/);
+    await assert.rejects(ytools.youtube_play_nth.run({ n: 5 }), /only 1 video on this page/);
     assert.match(await ytools.youtube_play.run({ query: 'lofi' }), /Playing "First video" by Chan in Safari/);
     assert.strictEqual(opened[2][0], 'https://www.youtube.com/watch?v=vid00000001');
     assert.match(await ytools.youtube_play_nth.run({ n: -1 }), /"Second video"/, 'last = the last one');
+    // The page in front is read as the user sees it, which can differ from YouTube's public order (the bug: "the first video" opened
+    // GateWay Classes because the public list had it first, while the user's signed-in page showed Multi Atoms first).
+    const onScreen = [{ id: 'screen00001', channel: 'Multi Atoms', title: 'DS Data Structure in One Shot | Unit-2' }, { id: 'screen00002', channel: 'Multi Atoms Plus', title: 'One shot of Unit 2' },
+      { id: 'screen00003', channel: 'Multi Atoms Plus', title: 'All Units' }, { id: 'screen00004', channel: 'GateWay Classes', title: 'DATA STRUCTURE U-2 Part-1 Stacks' }];
+    const navigated = []; let reading = onScreen;
+    const seeing = yt({ fn: (name) => ({ function: { name } }), fetchImpl: fakeFetch, screen: async () => reading,
+      browser: { current: async () => 'Brave Browser', pageUrl: async () => 'https://www.youtube.com/results?search_query=DSA+unit+2', openIn: async (u) => opened.push([u]), navigate: async (b, u) => navigated.push([b, u]) } });
+    assert.match(await seeing.youtube_play_nth.run({ n: 1 }), /number 1 on your screen: "DS Data Structure in One Shot/);
+    assert.deepStrictEqual(navigated.pop(), ['Brave Browser', 'https://www.youtube.com/watch?v=screen00001'], 'the page order wins and the tab is reused');
+    await seeing.youtube_play_nth.run({}); assert.strictEqual(navigated.pop()[1].endsWith('screen00001'), true, 'no n means the first');
+    await seeing.youtube_play_nth.run({ n: 4 }); assert.strictEqual(navigated.pop()[1].endsWith('screen00004'), true);
+    await seeing.youtube_play_nth.run({ n: -1 }); assert.strictEqual(navigated.pop()[1].endsWith('screen00004'), true);
+    assert.match(await seeing.youtube_play_nth.run({ channel: 'multi atoms plus', n: 2 }), /multi atoms plus video number 2 on your screen/i);
+    assert.strictEqual(navigated.pop()[1].endsWith('screen00003'), true, 'the 2nd from that channel');
+    await seeing.youtube_play_nth.run({ channel: 'gateway classes' }); assert.strictEqual(navigated.pop()[1].endsWith('screen00004'), true);
+    await seeing.youtube_play_nth.run({ channel: 'multi atoms' }); assert.strictEqual(navigated.pop()[1].endsWith('screen00001'), true, 'Multi Atoms is not Multi Atoms Plus');
+    await seeing.youtube_play_nth.run({ channel: 'the Multi Atoms channel', n: 2 }).then(() => assert.fail('only one Multi Atoms video'), (e) => assert.match(e.message, /only 1 video from the Multi Atoms channel/));
+    await assert.rejects(seeing.youtube_play_nth.run({ channel: 'Nobody Channel' }), /no video from Nobody Channel here\. Channels on this page: Multi Atoms, Multi Atoms Plus, GateWay Classes/);
+    await assert.rejects(seeing.youtube_play_nth.run({ n: 9 }), /only 4 videos on this page/);
+    // The script that reads the real page: valid JavaScript, page order, no Shorts / sidebar / text-less thumbnail links, channel names.
+    {
+      // A fake YouTube page: cards with a size, a title link, a channel, and the other kinds the real page mixes in.
+      const card = ({ id, title, channel = '', text, tag = 'ytd-video-renderer', hidden = false, skip = false, playlist = false, inRich = false }) => ({
+        closest: (sel) => (/ytd-reel|guide/.test(sel) && skip ? {} : /^ytd-rich-item-renderer$/.test(sel) && inRich ? {} : null), matches: (sel) => sel === tag, offsetParent: hidden ? null : {}, getBoundingClientRect: () => ({ height: hidden ? 0 : 281 }),
+        textContent: text || `0:15 Now playing ${title}`, querySelector: (sel) => {
+          if (/playlist\?/.test(sel)) return playlist ? {} : null;
+          if (/watch\?v=/.test(sel)) return { getAttribute: () => `/watch?v=${id}&pp=x` };
+          if (/video-title/.test(sel)) return { getAttribute: (n) => (n === 'title' ? title : null), textContent: title };
+          if (/channel-name|@/.test(sel) && sel.includes('ytd-channel-name')) return channel ? { textContent: ` ${channel} ` } : null;
+          return null;
+        } });
+      const page = [card({ id: 'promo0000001', title: 'Give your big idea a home', tag: 'yt-lockup-view-model', hidden: true }), card({ id: 'first0000001', title: 'DS One Shot  Unit-2', channel: 'Multi Atoms' }),
+        card({ id: 'short0000001', title: 'A Short', skip: true }), card({ id: 'play00000001', title: 'One Shot Videos', tag: 'yt-lockup-view-model', text: '20 videosOne Shot Videos', playlist: true }),
+        card({ id: 'third0000001', title: 'Gateway   Stacks', channel: 'GateWay Classes' }), card({ id: 'first0000001', title: 'a duplicate of the first', channel: 'Multi Atoms' }),
+        card({ id: 'rich00000001', title: 'Inside a rich item', tag: 'yt-lockup-view-model', inRich: true })];
+      const out = new Function('document', `return ${yt.SCREEN_JS}`)({ querySelectorAll: () => page });
+      assert.deepStrictEqual(yt.parseScreen(out), [{ id: 'first0000001', channel: 'Multi Atoms', title: 'DS One Shot Unit-2' }, { id: 'third0000001', channel: 'GateWay Classes', title: 'Gateway Stacks' }],
+        'page order; no hidden promos, Shorts, playlists, duplicates or nested lockups; the title, not the duration badge');
+      // JavaScript blocked in the browser: Alfred falls back to its own list and says how to read the real page.
+      reading = null;
+      const blocked = yt({ fn: (name) => ({ function: { name } }), fetchImpl: fakeFetch, screen: async () => { throw new Error('Brave Browser is blocking this. The user must turn on View > Developer > Allow JavaScript from Apple Events in Brave Browser.'); },
+        browser: { current: async () => 'Brave Browser', pageUrl: async () => 'https://www.youtube.com/results?q=x', openIn: async () => {}, navigate: async () => { throw new Error('no'); } } });
+      await assert.rejects(blocked.youtube_play_nth.run({ n: 1 }), /blocking this\. The user must turn on View > Developer/, 'no list yet: the setting is named');
+      await blocked.youtube_channel.run({ name: 'david dobrik' });
+      await assert.rejects(blocked.youtube_play_nth.run({ n: 1 }), /blocking this/, 'a YouTube page is in front but unreadable: refuse, never fall back to the public order');
+    }
+    reading = []; // the page cannot be read: it falls back to the list Alfred holds, and says that it may differ
+    await seeing.youtube_channel.run({ name: 'david dobrik' });
+    await assert.rejects(seeing.youtube_play_nth.run({ n: 1 }), /could not read the videos on this YouTube page/, 'in front but unreadable: refuse');
+    assert.strictEqual(await seeing.__youtube_list.run(), 'yes');
   }
   // Around music and calls: Alfred's own parts are not "someone else"; echo cancellation switches on only while something plays
   // out of speakers (after two polls, off after four); no talking into a call over speakers; the volume is put back only if untouched.

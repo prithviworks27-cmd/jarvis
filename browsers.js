@@ -120,10 +120,15 @@ return out`).catch(() => '');
     if (b === 'Safari') return osa('tell application "Safari" to return (name of current tab of front window) & linefeed & (text of current tab of front window)');
     return runJs(b, "document.title + '\\n' + document.body.innerText.slice(0, 40000)");
   }
+  // Sends the front tab of a browser to a new address, so the Back button still works and no new tab piles up.
+  const navigate = async (b, url) => {
+    if (!BROWSERS.includes(b)) throw new Error('Unknown browser.');
+    await osa(b === 'Safari' ? 'on run argv\ntell application "Safari" to set URL of current tab of front window to (item 1 of argv)\nend run' : `on run argv\ntell application "${b}" to set URL of active tab of front window to (item 1 of argv)\nend run`, url);
+  };
   // Opens a URL in a given browser (or the default one).
   const openIn = async (url, b) => { await run('open', b ? ['-a', b, url] : [url]); };
 
-  return { current, noteFront, listTabs, switchTab, pageUrl, pageText, runJs, openIn, isBrowser, canonical };
+  return { current, noteFront, listTabs, switchTab, pageUrl, pageText, runJs, openIn, navigate, isBrowser, canonical };
 };
 module.exports.tabScore = tabScore;
 module.exports.bestTab = bestTab;

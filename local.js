@@ -42,7 +42,7 @@ async function route(raw, ctx = {}) {
   if (!t || t.length > 60) return null;
   let m;
 
-  // "Play the second video": only when Alfred itself opened a YouTube channel or search a moment ago (it knows that list).
+  // "Play the second video": when a YouTube page is in front (read off the screen), or Alfred itself opened a channel or search a moment ago.
   if ((m = t.match(/^(?:open|play|click(?:\s+on)?|watch|put\s+on|start)\s+(?:the\s+)?(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|last|\d{1,2}(?:st|nd|rd|th)?)\s+(?:video|one|result|clip)$/)) && ctx.youtubeList && await ctx.youtubeList()) {
     const n = require('./youtube').ordinal(m[1].replace(/(?<=\d)(?:st|nd|rd|th)$/, ''));
     if (n) return { tool: 'youtube_play_nth', args: { n } };

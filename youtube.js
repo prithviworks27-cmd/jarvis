@@ -59,7 +59,35 @@ function pickChannel(said, channels) {
 
 const watchUrl = (id) => `https://www.youtube.com/watch?v=${id}`;
 
-module.exports = ({ fn, browser, fetchImpl = (...a) => fetch(...a) }) => {
+// The page in front, in the order the user sees it, read from the page itself (needs the browser's "Allow JavaScript from Apple Events"):
+// [{ id, channel, title }]. Shorts, ads, the sidebar and comments are skipped. Document order is the on-screen order.
+const SCREEN_JS = `(() => {
+  const SKIP = 'ytd-reel-shelf-renderer, ytd-rich-shelf-renderer[is-shorts], ytm-shorts-lockup-view-model, ytd-guide-renderer, ytd-mini-guide-renderer, #guide, ytd-comments, #movie_player, ytd-miniplayer, ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ytd-masthead';
+  const out = [], seen = new Set();
+  for (const card of document.querySelectorAll('ytd-video-renderer, ytd-rich-item-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer, yt-lockup-view-model')) {
+    if (card.closest(SKIP) || card.offsetParent === null || !card.getBoundingClientRect().height) continue; // hidden promos have no size
+    if (card.matches('yt-lockup-view-model') && card.closest('ytd-rich-item-renderer')) continue; // counted once, through its rich item
+    const text = card.textContent.replace(/\\s+/g, ' ').trim();
+    if (/^\\d+\\s+videos?\\b/i.test(text) || card.querySelector('a[href*="/playlist?"]')) continue; // a playlist is not a video
+    const link = card.querySelector('a[href*="/watch?v="]');
+    const m = link && link.getAttribute('href').match(/[?&]v=([\\w-]{6,20})/);
+    if (!m || seen.has(m[1])) continue;
+    const t = card.querySelector('a#video-title, a#video-title-link, a.yt-lockup-metadata-view-model__title, h3 a, h3');
+    const title = ((t && (t.getAttribute('title') || t.getAttribute('aria-label') || t.textContent)) || '').replace(/\\s+/g, ' ').trim();
+    if (!title) continue;
+    const c = card.querySelector('ytd-channel-name a, ytd-channel-name, #channel-name a, a[href^="/@"], a[href^="/channel/"], .yt-content-metadata-view-model__metadata-text');
+    seen.add(m[1]);
+    out.push(m[1] + '\\t' + (c ? c.textContent.trim().replace(/\\s+/g, ' ').replace(/^(.+?) \\1$/, '$1') : '') + '\\t' + title.slice(0, 160));
+    if (out.length >= 30) break;
+  }
+  return out.join('\\n');
+})()`;
+const parseScreen = (out) => String(out).split('\n').filter((l) => l.includes('\t')).map((l) => { const [id, channel, title] = l.split('\t'); return { id, channel, title }; });
+// Throws when the browser blocks JavaScript from Apple Events (browsers.js words that for the user).
+const realScreen = async (browserApi, b) => parseScreen(await browserApi.runJs(b, SCREEN_JS));
+
+module.exports = ({ fn, browser, fetchImpl = (...a) => fetch(...a), screen = (b) => realScreen(browser, b) }) => {
+  const onYoutube = async (b) => !!b && /^https?:\/\/(www\.|m\.)?youtube\.com/i.test(await browser.pageUrl(b).catch(() => ''));
   let last = null; // { kind, label, videos, at }
   const remember = (kind, label, videos) => { last = { kind, label, videos, at: Date.now() }; };
   const fresh = () => !!last && Date.now() - last.at < MAX_AGE && last.videos.length > 0;
@@ -118,19 +146,39 @@ module.exports = ({ fn, browser, fetchImpl = (...a) => fetch(...a) }) => {
     },
     youtube_play_nth: {
       group: 'media',
-      def: fn('youtube_play_nth', 'Play the Nth video (1 = first, -1 = last) from the YouTube channel or search Alfred opened most recently: "play the second video", "open the third one". Only for lists Alfred opened, not for whatever else is on screen.',
-        { n: { type: 'number' }, browser: { type: 'string', description: 'only if the user named a browser' } }, ['n']),
-      run: async ({ n, browser: said }) => {
-        if (!fresh()) throw new Error('I have no YouTube list to pick from. Ask me to open a channel or search first.');
-        const i = Number(n) === -1 ? last.videos.length : Math.round(Number(n));
+      def: fn('youtube_play_nth', 'Play a video from the YouTube page the user is looking at (a search, a channel, the home feed), by its position as they see it ("play the second video", "open the third one", n = -1 for the last) or by channel ("open the Multi Atoms video", with n for the 2nd from that channel). Shorts are not videos. It reads the real page, so the order is the one on screen.',
+        { n: { type: 'number', description: 'position, 1 = first; default 1' }, channel: { type: 'string', description: 'only videos from this channel' }, browser: { type: 'string', description: 'only if the user named a browser' } }),
+      run: async ({ n, channel, browser: said }) => {
+        const b = await browser.current(said);
+        const here = await onYoutube(b);
+        let videos = [], source = 'list';
+        let blocked = '';
+        if (here) { try { videos = await screen(b); if (videos.length) source = 'screen'; } catch (e) { blocked = e.message; } }
+        if (!videos.length) {
+          // A YouTube page is in front but unreadable: do NOT fall back to YouTube's public order, which can differ from what the user
+          // sees (that once opened the wrong video). Only without a YouTube page in front is Alfred's own list used.
+          if (here) throw new Error(blocked || 'I could not read the videos on this YouTube page.');
+          if (!fresh()) throw new Error('There is no YouTube page in front. Ask me to open a channel or search first.');
+          videos = last.videos;
+        }
+        let pool = videos;
+        if (channel) {
+          // An exact channel name wins ("Multi Atoms" is not "Multi Atoms Plus"); otherwise the spoken name must be part of the channel's.
+          const want = squash(String(channel).replace(/\b(?:the|youtube|channel|official)\b/gi, ''));
+          const exact = videos.filter((v) => squash(v.channel) === want);
+          pool = exact.length ? exact : videos.filter((v) => want && squash(v.channel).includes(want));
+          if (!pool.length) throw new Error(`I see no video from ${channel} here. Channels on this page: ${[...new Set(videos.map((v) => v.channel).filter(Boolean))].slice(0, 6).join(', ') || 'none readable'}.`);
+        }
+        const count = pool.length;
+        const i = Number(n) === -1 ? count : Math.round(Number(n) || 1);
         if (!(i >= 1)) throw new Error('Which one? Say first, second, third and so on.');
-        const v = last.videos[i - 1];
-        if (!v) throw new Error(`I only have ${last.videos.length} videos from ${last.label}.`);
-        const b = await open(watchUrl(v.id), said);
-        return `Playing number ${i} from ${last.label}: "${v.title}"${b ? ` in ${b}` : ''}.`;
+        const v = pool[i - 1];
+        if (!v) throw new Error(`There ${count === 1 ? 'is only 1 video' : `are only ${count} videos`}${channel ? ` from ${channel}` : ''} on this page.`);
+        if (source === 'screen') await browser.navigate(b, watchUrl(v.id)); else await open(watchUrl(v.id), said);
+        return `Playing ${channel ? `${channel} video ` : 'video '}number ${i}${source === 'screen' ? ' on your screen' : ` from ${last.label} (YouTube's public order, which may differ from what you see)`}: "${v.title.slice(0, 90)}"${v.channel ? ` by ${v.channel}` : ''}.`;
       },
     },
-    __youtube_list: { hidden: true, def: fn('__youtube_list', 'internal'), run: async () => (fresh() ? 'yes' : 'no') },
+    __youtube_list: { hidden: true, def: fn('__youtube_list', 'internal'), run: async () => ((fresh() || await onYoutube(await browser.current().catch(() => null))) ? 'yes' : 'no') },
   };
   return tools;
 };
@@ -139,5 +187,7 @@ module.exports.channelsIn = channelsIn;
 module.exports.searchVideosIn = searchVideosIn;
 module.exports.channelVideosIn = channelVideosIn;
 module.exports.pageData = pageData;
+module.exports.SCREEN_JS = SCREEN_JS;
+module.exports.parseScreen = parseScreen;
 module.exports.subscribers = subscribers;
 module.exports.ordinal = ordinal;
