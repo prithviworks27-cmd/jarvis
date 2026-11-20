@@ -61,6 +61,7 @@ const tools = {
   open_app: {
     def: fn('open_app', 'Open a Mac application by name, e.g. "Spotify".', { name: { type: 'string' } }, ['name']),
     run: async ({ name }) => {
+      if (/[\/\\]/.test(name)) throw new Error('Say the name of the app, not a path: I do not start programs by location.'); // `open -a` would run any .app on disk
       // `open -a` needs the exact app name ("Google Chrome"), but people say "Chrome", and speech recognition says "Clawed" for
       // "Claude": fall back to a partial match, then to the app that sounds most like it.
       try { await run('open', ['-a', name]); return `Opened ${name}.`; } catch (e) {

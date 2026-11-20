@@ -13,7 +13,8 @@ const { ensure } = require('./helpers');
 const { paste: realPaste } = require('./dictate');
 
 const LOG = process.env.JARVIS_ACTION_LOG || path.join(os.homedir(), 'Library/Logs/jarvis-actions.log'); // tests log elsewhere
-const RISKY_WORDS = ['send', 'submit', 'buy', 'pay', 'purchase', 'order', 'delete', 'remove', 'confirm', 'transfer', 'post', 'publish', 'sign out', 'log out'];
+const RISKY_WORDS = ['send', 'submit', 'buy', 'pay', 'purchase', 'order', 'delete', 'remove', 'confirm', 'transfer', 'post', 'publish', 'sign out', 'log out',
+  'forward', 'allow', 'authorize', 'approve', 'accept', 'share', 'checkout', 'subscribe', 'install'];
 const RISKY_CLICK = new RegExp(RISKY_WORDS.join('|'), 'i');
 const KEYCODES = { return: 36, enter: 76, tab: 48, space: 49, delete: 51, escape: 53, left: 123, right: 124, down: 125, up: 126, pagedown: 121, pageup: 116, home: 115, end: 119 };
 const MODS = { cmd: 'command', command: 'command', ctrl: 'control', control: 'control', alt: 'option', option: 'option', shift: 'shift' };

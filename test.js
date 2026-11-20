@@ -14,6 +14,7 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   assert.ok(definitions.length >= 10 && definitions.every((d) => d.function.name));
   assert.match(await runTool('open_url', { url: 'file:///etc/passwd' }), /^Error: Only http/);
   assert.match(await runTool('nope', {}), /^Error: Unknown tool/);
+  assert.match(await runTool('open_app', { name: '/Users/nobody/Downloads/evil.app' }), /not a path/);
   assert.strictEqual(await runTool('set_clipboard', { text: 'jarvis-test' }), 'Copied.');
   assert.strictEqual(await runTool('get_clipboard', {}), 'jarvis-test');
   // Safety rules in control.js (none of these send a real key or click)
@@ -26,6 +27,7 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   process.env.JARVIS_CONTROL_APPS = 'no-such-app';
   assert.match(await runTool('type_text', { text: 'x' }), /^Error: I am not allowed to control/);
   assert.match(await runTool('click_ui_element', { label: 'Send' }), /^CONFIRMATION REQUIRED/); // parked, not clicked
+  for (const word of ['Forward', 'Allow', 'Authorize', 'Approve', 'Accept all', 'Share', 'Checkout', 'Subscribe', 'Install']) assert.match(await runTool('click_ui_element', { label: word }), /^CONFIRMATION REQUIRED/, `${word} needs a yes`);
   const parked = require('./tools').takePending();
   assert.ok(parked && !require('./tools').takePending(), 'pending is single-use');
   // WhatsApp: only the chat title counts. A group lists its members under the title; "Rishabh" in that list once made the
@@ -780,6 +782,9 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   }
   assert.throws(() => extras.safePath('/etc/passwd'), /home folder/);
   for (const p of [`${os.homedir()}/.ssh/id_rsa`, '/x/.env', '/x/.env.local', `${os.homedir()}/Library/Keychains/login.keychain-db`]) assert.ok(extras.PRIVATE.test(p), p);
+  const H = os.homedir();
+  for (const p of ['.git-credentials', '.zsh_history', '.bash_history', '.zshrc', '.zprofile', '.config/gcloud/credentials.db', '.azure/accessTokens.json', '.claude/settings.json', 'Library/Application Support/Slack/Cookies', 'Library/Application Support/discord/Local Storage', 'Library/Application Support/Microsoft Edge/Default', 'Library/Application Support/Arc/StorableSidebar.json']) assert.ok(extras.PRIVATE.test(`${H}/${p}`), p);
+  for (const p of ['Documents/profile.txt', 'Documents/zshrc-notes.md', 'Documents/Slack notes.txt', 'Documents/arc.pdf', 'Documents/history.txt']) assert.ok(!extras.PRIVATE.test(`${H}/${p}`), `${p} stays readable`);
   assert.ok(!extras.PRIVATE.test('/x/notes.env.md') && !extras.PRIVATE.test('/x/keynote.txt'));
   assert.strictEqual(extras.htmlText('<p>Hi&amp;bye</p><script>evil()</script><li>two</li>'), 'Hi&bye\ntwo');
   const T = require('./tools');

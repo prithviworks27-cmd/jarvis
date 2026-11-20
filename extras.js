@@ -14,7 +14,7 @@ const tilde = (p) => (p.startsWith(HOME) ? '~' + p.slice(HOME.length) : p);
 const MAX_TEXT = 6000; // about 1500 tokens: enough to answer from, small enough for the free tier's per-minute budget
 
 // Never read, list or open these, even when asked: keys, credentials, browser, mail and keychain data.
-const PRIVATE = /(^|\/)(\.ssh|\.gnupg|\.aws|\.kube|\.docker|\.netrc|\.npmrc|\.config\/gh|Library\/(Keychains|Cookies|Mail|Messages|Safari|Accounts|Application Support\/(Google|BraveSoftware|Firefox|com\.apple\.TCC)))(\/|$)|(^|\/)\.env(\.[^/]*)?$|\.(pem|key|p12|pfx|keychain-db|kdbx|ovpn)$|(^|\/)id_(rsa|ed25519|ecdsa|dsa)/i;
+const PRIVATE = /(^|\/)(\.ssh|\.gnupg|\.aws|\.kube|\.docker|\.netrc|\.npmrc|\.config\/(gh|gcloud)|\.azure|\.claude|\.git-credentials|Library\/(Keychains|Cookies|Mail|Messages|Safari|Accounts|Application Support\/(Google|BraveSoftware|Firefox|Microsoft Edge|Arc|Slack|discord|Signal|1Password|Claude|com\.apple\.TCC)))(\/|$)|(^|\/)\.env(\.[^/]*)?$|(^|\/)\.(zsh_history|bash_history|zhistory|python_history|node_repl_history|zshrc|zprofile|zshenv|bashrc|bash_profile|profile)$|\.(pem|key|p12|pfx|keychain-db|kdbx|ovpn)$|(^|\/)id_(rsa|ed25519|ecdsa|dsa)/i;
 // Opening these would run code, so open_file refuses them.
 const RUNS_CODE = /\.(app|command|tool|sh|bash|zsh|pkg|mpkg|workflow|scpt|scptd|applescript|terminal|jar|action|prefpane|osax|kext)$/i;
 
