@@ -59,6 +59,8 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   process.env.JARVIS_CONTROL_APPS = 'WhatsApp,Google Chrome';
   const fake = require('./control')({ run: async () => '', osa: fakeOsa, fn: (name) => ({ function: { name } }) });
   assert.match(await fake.tools.press_keys.run({ keys: 'return' }), /^CONFIRMATION REQUIRED/);
+  for (const k of ['cmd + return', 'Enter', 'cmd+ENTER', 'space']) assert.match(await fake.tools.press_keys.run({ keys: k }), /^CONFIRMATION REQUIRED/, `${k} needs a yes`);
+  await fake.tools.press_keys.run({ keys: 'return' }); // the last park is the one the next lines use
   front = 'Google Chrome'; // the user moved before saying yes
   await assert.rejects(fake.takePending().run(), /moved to a different place/);
   assert.strictEqual(sent.length, 0, 'no key may be pressed in the wrong app');
@@ -215,6 +217,18 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
     yesParked = { run: async () => { ran++; return 'Pressed return.'; } };
     assert.strictEqual(await brain.ask('what is your name'), 'Hello, sir.');
     assert.strictEqual(ran, 1, 'anything else drops it without running');
+    for (const no of ["Okay, don't send it", 'yes but change it to hello', 'ok cancel that', 'send it to Maa instead', "sure, what's the weather"]) {
+      yesParked = { run: async () => { ran++; return 'Pressed return.'; } };
+      await brain.ask(no);
+      assert.strictEqual(ran, 1, `"${no}" is not a yes`);
+    }
+    for (const yes of ['Yes.', 'okay', 'Yes, please', 'yes sir', 'Send it', 'go ahead', 'haan', 'हाँ', 'ठीक है']) {
+      yesParked = { run: async () => { ran++; return 'Pressed return.'; } };
+      const before = ran;
+      await brain.ask(yes);
+      assert.strictEqual(ran, before + 1, `"${yes}" is a yes`);
+    }
+    ran = 1; // as before, for the lines below
     modelSays = 'Silent Hill was directed by Christophe Gans, sir.SILENT';
     assert.strictEqual(await brain.ask('who directed Silent Hill'), 'Silent Hill was directed by Christophe Gans, sir.');
   } finally {
@@ -750,6 +764,20 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
   assert.throws(() => extras.publicUrl('http://192.168.0.1/admin'), /public/);
   assert.throws(() => extras.publicUrl('http://[::1]/'), /public/);
   assert.throws(() => extras.publicUrl('file:///etc/passwd'), /http/);
+  for (const u of ['http://localhost./', 'http://app.localhost/', 'http://[::ffff:127.0.0.1]/', 'http://[::ffff:7f00:1]/', 'http://100.64.0.1/', 'http://169.254.169.254/', 'http://metadata.google.internal/', 'http://2130706433/', 'http://[fd12::1]/']) assert.throws(() => extras.publicUrl(u), /public/, u);
+  assert.ok(extras.publicUrl('http://93.184.216.34/').startsWith('http://93.184.216.34'));
+  {
+    // A redirect to a local address is refused before it is requested; a good one is followed.
+    const real = global.fetch;
+    const asked = [];
+    const page = (status, headers, body = '') => ({ status, ok: status < 300, headers: { get: (k) => headers[k.toLowerCase()] || null }, text: async () => body });
+    global.fetch = async (url) => { asked.push(url); return url.startsWith('http://93.184.216.34/start') ? page(302, { location: 'http://127.0.0.1:8080/secret' }) : url.includes('/hop') ? page(302, { location: '/ok' }) : page(200, { 'content-type': 'text/plain' }, 'fine'); };
+    try {
+      await assert.rejects(extras.fetchText('http://93.184.216.34/start'), /public/);
+      assert.deepStrictEqual(asked, ['http://93.184.216.34/start'], 'the local address was never requested');
+      assert.strictEqual(await extras.fetchText('http://93.184.216.34/hop'), 'fine');
+    } finally { global.fetch = real; }
+  }
   assert.throws(() => extras.safePath('/etc/passwd'), /home folder/);
   for (const p of [`${os.homedir()}/.ssh/id_rsa`, '/x/.env', '/x/.env.local', `${os.homedir()}/Library/Keychains/login.keychain-db`]) assert.ok(extras.PRIVATE.test(p), p);
   assert.ok(!extras.PRIVATE.test('/x/notes.env.md') && !extras.PRIVATE.test('/x/keynote.txt'));

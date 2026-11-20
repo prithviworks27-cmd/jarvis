@@ -19,6 +19,12 @@ const QUIET = new Set(['whatsapp_open_chat', 'switch_tab', 'open_app', 'open_url
 // The model can ask for a tool group the request did not obviously need (handled here, not in tools.js).
 const USE_TOOLS = fn('use_tools', `Load more tools when none of yours fit the request, then use them. Groups: control (type, click, press keys, WhatsApp, Discord voice, browser tabs), github (repos, pull requests, issues, CI), files (find, read, open files and PDFs), media (play or control music; YouTube channels, search and playing videos), web (search the web for answers, read a page), system (battery, disk, dark mode, timers, calculator).`,
   { group: { type: 'string', enum: Object.keys(GROUPS) } }, ['group']);
+// The whole sentence must be the answer: "Okay, don't send it" or "yes but change it" is not a yes. Politeness after it is fine.
+// Devanagari has no word boundaries for \b, so it gets its own pattern.
+const POLITE = '(?:\\W+(?:please|sir|now|thanks|thank you|go ahead|do it|send it|jarvis|alfred))*\\W*$';
+const YES_EN = new RegExp(`^\\W*(?:yes|yeah|yep|yup|sure|confirm|go ahead|do it|send it|ok|okay|haan|han|haa|ji|theek hai|thik hai|kar do|bhej do)${POLITE}`, 'i');
+const YES_HI = /^[\s.,!?]*(?:हाँ|हां|जी|ठीक है|ठीक|कर दो|भेज दो)[\s.,!?]*$/;
+const isYes = (text) => YES_EN.test(text) || YES_HI.test(text);
 // Anything that may need a follow-up step or a spoken answer (a question, "and/then", or words like send/type/write that continue after opening something) takes the normal two-call path.
 const ASKS_SOMETHING = /\?|\b(and|then|also|after|before|send|type|write|reply|text|tell|ask|say|read|check|click|press|play|search|find|what|how|when|who|where|bhejo|bhej|likho|likh|batao|bata|dikhao|padho|kya|kaun|kab|kahan|kaise|aur|phir|fir)\b|[\u0900-\u097F]/i; // includes common Hinglish words and any Devanagari
 
@@ -165,9 +171,8 @@ async function ask(userText, { onTool } = {}) {
   const mine = ++gen;
   // A parked action (Return key, risky click) only runs on the user's own "yes", never on the model's say-so.
   const parked = takePending();
-  const said = (re) => re.test(userText);
   // "Yes" in English, Hinglish or Hindi. Devanagari has no word boundaries for \b, so it gets its own check.
-  if (parked && (said(/^\W*(yes|yeah|yep|yup|sure|confirm|go ahead|do it|send it|ok|okay|haan|han|haa|ji|theek hai|thik hai|kar do|bhej do)\b/i) || said(/^[\s.,!?]*(हाँ|हां|जी|ठीक|कर दो|भेज दो)/))) {
+  if (parked && isYes(userText)) {
     const result = await parked.run().catch((e) => `Error: ${e.message}`);
     history.push({ role: 'user', content: userText }, { role: 'assistant', content: 'SILENT' });
     return result.startsWith('Error') ? result : '';

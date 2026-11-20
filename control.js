@@ -542,7 +542,7 @@ end tell`);
       run: logged('press_keys', async ({ keys }) => {
         const script = keyScript(keys);
         const go = async () => { await requireAllowed(); await sysevents(script); return `Pressed ${keys}.`; };
-        if (/(^|\+)(return|enter)$/i.test(keys.trim())) return confirm(`Press ${keys} in ${await frontApp()}.`, go, frontApp);
+        if (/(^|\+)(return|enter|space)$/i.test(String(keys).replace(/\s+/g, ''))) return confirm(`Press ${keys} in ${await frontApp()}.`, go, frontApp);
         return go();
       }),
     },

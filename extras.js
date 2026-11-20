@@ -4,6 +4,8 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const net = require('net');
+const dns = require('dns');
 const { closest } = require('./fuzzy');
 const { ensure } = require('./helpers');
 
@@ -37,21 +39,45 @@ const htmlText = (html) => String(html)
   .replace(/[ \t\r\f\v]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim();
 
 // Web pages the model asks for must be public: no localhost or home-network addresses.
+// An address is private when it is loopback, link-local, home-network, carrier-grade NAT (100.64/10), multicast, or IPv4 inside IPv6.
+function isPrivateIp(ip) {
+  const mapped = ip.match(/^::ffff:(?:(\d+\.\d+\.\d+\.\d+)|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/i);
+  if (mapped) ip = mapped[1] || [parseInt(mapped[2], 16) >> 8, parseInt(mapped[2], 16) & 255, parseInt(mapped[3], 16) >> 8, parseInt(mapped[3], 16) & 255].join('.');
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split('.').map(Number);
+    return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  }
+  return ip === '::' || ip === '::1' || /^(f[cd]|fe[89ab]|ff)/i.test(ip);
+}
 function publicUrl(u) {
   let url;
   try { url = new URL(String(u)); } catch { throw new Error('That is not a web address.'); }
   if (!/^https?:$/.test(url.protocol)) throw new Error('Only http(s) addresses are allowed.');
-  const h = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (h === 'localhost' || h.endsWith('.local') || h.endsWith('.localhost') || h === '0.0.0.0' || h === '::1' || /^(127|10)\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /^f[cd][0-9a-f]{2}:/.test(h) || /^fe80:/.test(h)) {
-    throw new Error('I only read public web pages.');
-  }
+  const h = url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, ''); // "localhost." is localhost too
+  if (h === 'localhost' || /\.(localhost|local|internal|localdomain)$/.test(h) || (net.isIP(h) && isPrivateIp(h))) throw new Error('I only read public web pages.');
+  return url.href;
+}
+// Names are checked by what they resolve to, so a public-looking name that points at this Mac or the home network is refused too.
+// shortcut: an answer that changes between this check and the fetch (DNS rebinding) is not caught; upgrade by connecting to the checked address.
+async function publicHost(u) {
+  const url = new URL(publicUrl(u));
+  const h = url.hostname.replace(/^\[|\]$/g, '');
+  if (!net.isIP(h) && (await dns.promises.lookup(h, { all: true })).some((a) => isPrivateIp(a.address))) throw new Error('I only read public web pages.');
   return url.href;
 }
 
+// Follows redirects by hand: every hop is checked BEFORE it is requested, not after.
 async function fetchText(url, limit = 2_000_000) {
-  const res = await fetch(publicUrl(url), { redirect: 'follow', signal: AbortSignal.timeout(12000), headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh) jarvis-assistant/1.0', Accept: 'text/html,text/plain,*/*' } });
+  let target = url, res;
+  for (let hop = 0; hop < 5; hop++) {
+    res = await fetch(await publicHost(target), { redirect: 'manual', signal: AbortSignal.timeout(12000), headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh) jarvis-assistant/1.0', Accept: 'text/html,text/plain,*/*' } });
+    const next = res.status >= 300 && res.status < 400 && res.headers.get('location');
+    if (!next) break;
+    target = new URL(next, target).href;
+    res = null;
+  }
+  if (!res) throw new Error('That page redirects too many times.');
   if (!res.ok) throw new Error(`${new URL(url).hostname} returned ${res.status}`);
-  publicUrl(res.url || url); // a redirect must not land on a local address either
   const type = res.headers.get('content-type') || '';
   if (!/text|html|json|xml/.test(type)) throw new Error(`That page is not text (${type.split(';')[0] || 'unknown type'}).`);
   const body = (await res.text()).slice(0, limit);
@@ -377,5 +403,7 @@ end run`, q).catch(() => '');
 module.exports.calculate = calculate;
 module.exports.safePath = safePath;
 module.exports.publicUrl = publicUrl;
+module.exports.fetchText = fetchText;
+module.exports.isPrivateIp = isPrivateIp;
 module.exports.htmlText = htmlText;
 module.exports.PRIVATE = PRIVATE;
