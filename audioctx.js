@@ -61,22 +61,27 @@ const osa = (script) => new Promise((resolve, reject) => execFile('osascript', [
 
 function ducker({ getVolume = () => osa('output volume of (get volume settings)').then(Number), setVolume = (n) => osa(`set volume output volume ${Math.round(n)}`), file = duckFile } = {}) {
   let ducked = null; // { from, to }
+  let ducking = null; // a duck() still reading or setting the volume
   const save = (d) => { try { fs.mkdirSync(path.dirname(file()), { recursive: true, mode: 0o700 }); fs.writeFileSync(file(), JSON.stringify({ ...d, at: Date.now() }), { mode: 0o600 }); } catch { /* best effort */ } };
   const forget = () => { ducked = null; try { fs.rmSync(file(), { force: true }); } catch { /* nothing saved */ } };
   return {
     isDucked: () => !!ducked,
-    async duck() {
-      if (ducked) return false;
-      const from = await getVolume().catch(() => NaN);
-      if (!Number.isFinite(from) || from < 12) return false; // already quiet, or a device without a volume
-      const to = Math.max(4, from * FACTOR);
-      ducked = { from, to: Math.round(to) };
-      save(ducked); // so a crash cannot leave the volume low
-      await setVolume(to);
-      return true;
+    duck() {
+      if (ducked || ducking) return Promise.resolve(false);
+      ducking = (async () => {
+        const from = await getVolume().catch(() => NaN);
+        if (!Number.isFinite(from) || from < 12) return false; // already quiet, or a device without a volume
+        const to = Math.max(4, from * FACTOR);
+        ducked = { from, to: Math.round(to) };
+        save(ducked); // so a crash cannot leave the volume low
+        await setVolume(to);
+        return true;
+      })().finally(() => { ducking = null; });
+      return ducking;
     },
     // Restores only if the user has not touched the volume in the meantime.
     async restore() {
+      await ducking?.catch(() => {}); // a duck that is still on its way must finish first, or it would lower the volume after this
       if (!ducked) return false;
       const { from, to } = ducked;
       forget();

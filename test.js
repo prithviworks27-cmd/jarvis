@@ -371,6 +371,11 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
     vol = 80; d = mk(); await d.duck(); assert.strictEqual(vol, 20);
     assert.strictEqual(await mk().recover(), true); assert.strictEqual(vol, 80, 'after a crash the saved volume comes back');
     assert.strictEqual(await mk().recover(), false);
+    // A cancel that arrives while a duck is still reading the volume: the duck finishes first and is then undone.
+    vol = 60; d = mk();
+    const late = d.duck();
+    assert.strictEqual(await d.restore(), true); await late;
+    assert.strictEqual(vol, 60, 'a duck in flight cannot leave the volume low');
     fs.rmSync(file, { force: true });
   }
   // Spotify by exact name (fake Spotify web API) and play_music's fallback order (fake apps).

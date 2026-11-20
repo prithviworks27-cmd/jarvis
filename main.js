@@ -116,7 +116,7 @@ audio.on('change', (now, was) => {
 });
 const quiet = () => !audioctx.speakNow(audio.state); // a call is using the microphone and the sound comes out of the speakers
 const notify = (text) => execFile('osascript', ['-e', 'on run argv\ndisplay notification (item 1 of argv) with title "Alfred"\nend run', String(text).slice(0, 240)], () => {});
-const restoreVolume = () => ducker.restore().catch(() => {});
+const restoreVolume = () => { clearTimeout(duckTimer); return ducker.restore().catch(() => {}); }; // a duck still waiting for its 250 ms must not fire after this
 const resumeAec = () => { if (aecMode() === 'always' || (aecMode() === 'auto' && audio.aec())) wakeSend('aec on'); }; // after a recording, if it is wanted again
 
 // Short sounds say "I am listening" / "got it" when you are not looking at the screen. JARVIS_SOUNDS=0 turns them off.
@@ -141,7 +141,7 @@ const oops = (e) => { console.error(e); send({ state: 'idle' }); return speech.s
 // Barge-in: while Alfred talks, the name detector keeps listening, so saying his name cuts him off and he listens to you.
 // Not while the reply itself contains the name (he would hear himself). JARVIS_BARGE_IN=0 turns it off.
 const bargeIn = () => process.env.JARVIS_BARGE_IN !== '0';
-let duckFailsafe;
+let duckFailsafe, duckTimer;
 let busy = false; // between "started listening" and "idle again"
 let turn = 0; // bumped whenever the user starts talking: an older turn must not touch the screen or the voice any more
 
@@ -257,7 +257,7 @@ if (gotLock) app.whenReady().then(async () => {
   ipcMain.on('listen-start', () => {
     browser.noteFront(); turn++; busy = true; speech.stop(); cancel(); wakeListening(false); cue('Tink');
     // Something is playing out loud: lower it while the command is spoken, so it is not part of what is heard.
-    if (process.env.JARVIS_DUCK !== '0' && audio.state.media && audio.state.leaks) setTimeout(() => ducker.duck().catch(() => {}), 250);
+    if (process.env.JARVIS_DUCK !== '0' && audio.state.media && audio.state.leaks) duckTimer = setTimeout(() => ducker.duck().catch(() => {}), 250);
     clearTimeout(duckFailsafe); duckFailsafe = setTimeout(restoreVolume, 25000);
     if (aecMode() !== 'off') wakeSend('aec off'); // the recording needs the microphone untouched
   }); // talking again also stops any action in progress

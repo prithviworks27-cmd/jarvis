@@ -84,10 +84,6 @@ const tools = {
       return `Opened ${url}${b ? ` in ${b}` : ''}.`;
     },
   },
-  web_search: {
-    def: fn('web_search', 'placeholder'),
-    run: async () => '',
-  },
   weather: {
     def: fn('weather', 'Get current weather and today/tomorrow forecast for a city. Omit city to use the user\'s default city.', { city: { type: 'string' } }),
     run: async ({ city }) => {
@@ -296,13 +292,15 @@ tools.air_quality = {
     return `${geo.name} air quality (a satellite and model ESTIMATE, not a ground station): US AQI ${c.us_aqi} (${AQI_BAND(c.us_aqi)}), PM2.5 ${c.pm2_5} µg/m³, PM10 ${c.pm10} µg/m³. Tell the user this is an estimate and that street-level monitors in polluted cities, Delhi especially, often read considerably higher${token ? '' : '; a free station-based source needs JARVIS_WAQI_TOKEN in .env'}.`;
   },
 };
-tools.web_search.def = fn('web_search', 'x', { query: { type: 'string' }, browser: { type: 'string', description: 'only if the user named a browser, e.g. "Safari"' } }, ['query']);
-tools.web_search.run = async ({ query, browser: said }) => {
-  const b = await browser.current(said);
-  await browser.openIn('https://www.google.com/search?q=' + encodeURIComponent(query), b);
-  return `Opened a Google results page for "${query}"${b ? ` in ${b}` : ''} on the user's screen. I have NOT read it, so I know nothing from it: never answer a question from this. For an answer use search_web, weather, air_quality, news or wikipedia.`;
+tools.web_search = {
+  def: fn('web_search', 'ONLY to put a Google results page on the user\'s screen when they ask to see it (in the browser they are working in, or the one they name). It returns no results to you. To answer a question yourself use search_web, air_quality, weather, news or wikipedia.',
+    { query: { type: 'string' }, browser: { type: 'string', description: 'only if the user named a browser, e.g. "Safari"' } }, ['query']),
+  run: async ({ query, browser: said }) => {
+    const b = await browser.current(said);
+    await browser.openIn('https://www.google.com/search?q=' + encodeURIComponent(query), b);
+    return `Opened a Google results page for "${query}"${b ? ` in ${b}` : ''} on the user's screen. I have NOT read it, so I know nothing from it: never answer a question from this. For an answer use search_web, weather, air_quality, news or wikipedia.`;
+  },
 };
-tools.web_search.def.function.description = 'ONLY to put a Google results page on the user\'s screen when they ask to see it (in the browser they are working in, or the one they name). It returns no results to you. To answer a question yourself use search_web, air_quality, weather, news or wikipedia.';
 
 // Internal checks for the fast paths (local.js). Never sent to the model.
 tools.__front_app = { hidden: true, def: fn('__front_app', 'internal'), run: () => osa('tell application "System Events" to get name of first application process whose frontmost is true') };
