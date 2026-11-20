@@ -108,7 +108,7 @@ module.exports = ({ run, osa, fn, paste = realPaste, browser, wachat = realWacha
   let pending = null;
 
   const log = (tool, args, result) => {
-    const shown = TYPED.has(tool) ? { text: `<${String(args.text ?? '').length} chars>` } : args;
+    const shown = TYPED.has(tool) ? { ...(args.name ? { name: args.name } : {}), text: `<${String(args.text ?? '').length} chars>` } : args; // the chat asked for is logged, the text typed is not
     fs.appendFile(LOG, `${new Date().toISOString()} ${tool} ${JSON.stringify(shown)} -> ${String(result).slice(0, 150)}
 `, { mode: 0o600 }, () => {});
   };
