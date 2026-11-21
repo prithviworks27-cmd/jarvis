@@ -11,6 +11,7 @@ const { ensure } = require('./helpers');
 
 const HOME = os.homedir();
 const tilde = (p) => (p.startsWith(HOME) ? '~' + p.slice(HOME.length) : p);
+const assistantName = () => process.env.JARVIS_NAME || 'Alfred';
 const MAX_TEXT = 6000; // about 1500 tokens: enough to answer from, small enough for the free tier's per-minute budget
 
 // Never read, list or open these, even when asked: keys, credentials, browser, mail and keychain data.
@@ -66,6 +67,21 @@ async function publicHost(u) {
   return url.href;
 }
 
+// Reads at most `limit` characters of a response and drops the rest, so a huge page never sits in memory.
+async function readText(res, limit) {
+  const reader = res.body?.getReader();
+  if (!reader) return '';
+  const decoder = new TextDecoder();
+  let text = '';
+  while (text.length < limit) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    text += decoder.decode(value, { stream: true });
+  }
+  await reader.cancel().catch(() => {});
+  return text.slice(0, limit);
+}
+
 // Follows redirects by hand: every hop is checked BEFORE it is requested, not after.
 async function fetchText(url, limit = 2_000_000) {
   let target = url, res;
@@ -80,7 +96,7 @@ async function fetchText(url, limit = 2_000_000) {
   if (!res.ok) throw new Error(`${new URL(url).hostname} returned ${res.status}`);
   const type = res.headers.get('content-type') || '';
   if (!/text|html|json|xml/.test(type)) throw new Error(`That page is not text (${type.split(';')[0] || 'unknown type'}).`);
-  const body = (await res.text()).slice(0, limit);
+  const body = await readText(res, limit);
   return /html/.test(type) ? htmlText(body) : body;
 }
 
@@ -183,7 +199,7 @@ module.exports = ({ run, osa, fn, confirm, events, browser, getTool = () => null
         const full = await resolveRepo(repo);
         const t = String(title || '').trim().slice(0, 200);
         if (!t) throw new Error('The issue needs a title.');
-        const b = String(body || '').trim().slice(0, 4000) || 'Created by voice with Alfred.';
+        const b = String(body || '').trim().slice(0, 4000) || `Created by voice with ${assistantName()}.`;
         return confirm(`Create a GitHub issue in ${full} titled "${t}".`, async () => `Created ${await gh('issue', 'create', '-R', full, '--title', t, '--body', b)}`, async () => 'github');
       },
     },
@@ -287,7 +303,7 @@ end run`, q).catch(() => '');
             }
           }
           await run('open', [`spotify:search:${encodeURIComponent(q)}`]);
-          return `Opened a Spotify search for ${q}; the user picks the song${spotify.configured() ? ' (nothing close enough was found to start by itself)' : ' (add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to .env, free from developer.spotify.com, and Alfred can start the exact song)'}.`;
+          return `Opened a Spotify search for ${q}; the user picks the song${spotify.configured() ? ' (nothing close enough was found to start by itself)' : ' (add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to .env, free from developer.spotify.com, and ${assistantName()} can start the exact song)'}.`;
         }
         // No Spotify: play it on YouTube (free), which starts straight away.
         const yt = getTool('youtube_play');

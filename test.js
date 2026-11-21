@@ -777,12 +777,16 @@ const runWith = (c, name, args) => c.tools[name].run(args).then((r) => r, (e) =>
     // A redirect to a local address is refused before it is requested; a good one is followed.
     const real = global.fetch;
     const asked = [];
-    const page = (status, headers, body = '') => ({ status, ok: status < 300, headers: { get: (k) => headers[k.toLowerCase()] || null }, text: async () => body });
-    global.fetch = async (url) => { asked.push(url); return url.startsWith('http://93.184.216.34/start') ? page(302, { location: 'http://127.0.0.1:8080/secret' }) : url.includes('/hop') ? page(302, { location: '/ok' }) : page(200, { 'content-type': 'text/plain' }, 'fine'); };
+    const page = (status, headers, body = null) => new Response(body, { status, headers });
+    global.fetch = async (url) => { asked.push(url); return url.startsWith('http://93.184.216.34/start') ? page(302, { location: 'http://127.0.0.1:8080/secret' }) : url.includes('/hop') ? page(302, { location: '/ok' }) : url.includes('/endless') ? page(200, { 'content-type': 'text/plain' }, new ReadableStream({ pull(c) { pulls++; c.enqueue(new TextEncoder().encode('x'.repeat(100000))); } })) : page(200, { 'content-type': 'text/plain' }, 'fine'); };
+    let pulls = 0;
     try {
       await assert.rejects(extras.fetchText('http://93.184.216.34/start'), /public/);
       assert.deepStrictEqual(asked, ['http://93.184.216.34/start'], 'the local address was never requested');
       assert.strictEqual(await extras.fetchText('http://93.184.216.34/hop'), 'fine');
+      const big = await extras.fetchText('http://93.184.216.34/endless', 250000);
+      assert.strictEqual(big.length, 250000, 'cut at the limit');
+      assert.ok(pulls < 10, `an endless page is not read to the end (${pulls} chunks)`);
     } finally { global.fetch = real; }
   }
   assert.throws(() => extras.safePath('/etc/passwd'), /home folder/);

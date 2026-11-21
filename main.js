@@ -112,10 +112,10 @@ const wakeSend = (line) => { try { if (wakeCmd) fs.writeSync(wakeCmd, `${line}\n
 const aecMode = () => process.env.JARVIS_AEC || 'off';
 audio.on('aec', (on) => { if (aecMode() === 'auto') { console.log(`${stamp()} [audio] ${on ? 'something is playing out loud: echo cancellation on' : 'quiet again: echo cancellation off'}`); wakeSend(`aec ${on ? 'on' : 'off'}`); } });
 audio.on('change', (now, was) => {
-  if (now.call !== was.call) console.log(`${stamp()} [audio] ${now.call ? `a call is on (${now.callApps.join(', ')})${now.leaks ? ': Alfred will not speak aloud' : ''}` : 'the call ended'}`);
+  if (now.call !== was.call) console.log(`${stamp()} [audio] ${now.call ? `a call is on (${now.callApps.join(', ')})${now.leaks ? `: ${assistantName()} will not speak aloud` : ''}` : 'the call ended'}`);
 });
 const quiet = () => !audioctx.speakNow(audio.state); // a call is using the microphone and the sound comes out of the speakers
-const notify = (text) => execFile('osascript', ['-e', 'on run argv\ndisplay notification (item 1 of argv) with title "Alfred"\nend run', String(text).slice(0, 240)], () => {});
+const notify = (text) => execFile('osascript', ['-e', 'on run argv\ndisplay notification (item 1 of argv) with title (item 2 of argv)\nend run', String(text).slice(0, 240), assistantName()], () => {});
 const restoreVolume = () => { clearTimeout(duckTimer); return ducker.restore().catch(() => {}); }; // a duck still waiting for its 250 ms must not fire after this
 const resumeAec = () => { if (aecMode() === 'always' || (aecMode() === 'auto' && audio.aec())) wakeSend('aec on'); }; // after a recording, if it is wanted again
 
